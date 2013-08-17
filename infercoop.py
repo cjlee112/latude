@@ -18,7 +18,7 @@ def iid_binomial_last(n, mvals, my_m, mvalsLast=None, nLast=0, **kwargs):
         mvalsRound = mvals - mvalsLast
         nRound = n - nLast
         condition = numpy.logical_and(mvalsRound >= 0, mvalsRound <= nRound)
-        pCoop =  numpy.where((mvalsRound + 1.) / (nRound + 2.), 0.5)
+        pCoop =  numpy.where(condition, (mvalsRound + 1.) / (nRound + 2.), 0.5)
     else: # treat as first round
         pCoop = (mvals + 1.) / (n + 2.)
     return dict(pCoop=pCoop, mvalsLast=mvals, nLast=n) # save last round info
