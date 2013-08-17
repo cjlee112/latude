@@ -9,6 +9,22 @@ def iid_binomial(n, mvals, my_m, **kwargs):
     return dict(pCoop=pCoop)
 
 
+def iid_binomial_last(n, mvals, my_m, mvalsLast=None, nLast=0, **kwargs):
+    '''same as iid_binomial() except it computes pCoop solely based on
+    reputation increase from the previous round.
+    This should handle any player who suddenly switches to allC, allD,
+    or some other value of theta.'''
+    if mvalsLast is not None: # compute rep increase from last round
+        mvalsRound = mvals - mvalsLast
+        nRound = n - nLast
+        condition = numpy.logical_and(mvalsRound >= 0, mvalsRound <= nRound)
+        pCoop =  numpy.where((mvalsRound + 1.) / (nRound + 2.), 0.5)
+    else: # treat as first round
+        pCoop = (mvals + 1.) / (n + 2.)
+    return dict(pCoop=pCoop, mvalsLast=mvals, nLast=n) # save last round info
+
+
+
 '''
 >>> a = numpy.arange(6)
 >>> a
@@ -19,7 +35,7 @@ array([0, 1, 2, 3, 4, 5])
 '''
 
 
-def top_binomial(n, mvals, my_m, **kwargs):
+def top_binomial(n, mvals, my_m, pRandom=0.1, **kwargs):
     '''Given vector of m values (number of times player i cooperated,
     out of n total trials), and my m value, compute vector of probabilities
     that player i will cooperate with me.
@@ -29,7 +45,10 @@ def top_binomial(n, mvals, my_m, **kwargs):
     * mvals should be a numpy array
     * each player i cooperates with the TOP (most cooperative) p_i players
     * p_i is inferred from binomial model given m,n counts and uninformative
-      prior. '''
+      prior. 
+    * pRandom: probability fraction associated with randomly cooperating
+      with anyone, rather than according to TOP model.  Makes this less
+      of a zero-one boolean function.'''
     # compute fraction who cooperated more than I
     pRank = (mvals >= my_m).sum() / float(len(mvals))
     d = {}
@@ -39,26 +58,47 @@ def top_binomial(n, mvals, my_m, **kwargs):
             pCoop[i] = d[m]
         except KeyError:
             rv = stats.beta(m + 1, n - m + 1)
-            pCoop[i] = d[m] = rv.sf(pRank)
+            pCoop[i] = d[m] = rv.sf(pRank) * (1. - pRandom) \
+                + pRandom * (1. - pRank)
     return dict(pCoop=pCoop)
 
 
+
+def top_binomial_last(n, mvals, my_m, mvalsLast=None, nLast=0, pRandom=0.1,
+                      **kwargs):
+    '''same as top_binomial() except it computes pCoop solely based on
+    reputation increase from the previous round'''
+    # compute fraction who cooperated more than I
+    pRank = (mvals >= my_m).sum() / float(len(mvals))
+    d = {}
+    pCoop = numpy.zeros(len(mvals))
+    if mvalsLast is not None:
+        mvalsRound = mvals - mvalsLast
+    else:
+        mvalsRound = mvals
+    nRound = n - nLast
+    for i,m in enumerate(mvalsRound):
+        try:
+            pCoop[i] = d[m]
+        except KeyError:
+            if m >= 0 and m <= nRound: # make sure remapped results make sense
+                rv = stats.beta(m + 1, nRound - m + 1)
+                pCoop[i] = d[m] = rv.sf(pRank) * (1. - pRandom) \
+                    + pRandom * (1. - pRank)
+            else: # something wrong with mapping, so treat as uncertain
+                pCoop[i] = 0.5
+    return dict(pCoop=pCoop, mvalsLast=mvals, nLast=n) # save last round info
+
+
 # empirical approach
-'''
->>> a = numpy.array((4,7,2,9,1,8))
->>> rvals = numpy.arange(6)
->>> infercoop.infer_empirical(a, rvals, 5)
-(array([ 0.42857143,  0.57142857,  0.28571429,  0.85714286,  0.14285714,
-        0.71428571]), array([2, 3, 1, 5, 0, 4]))
-'''
 
 
-def infer_empirical(n, mvals, myRep, lastround, rvals=None, nround=0, **kwargs):
+def iid_empirical(n, mvals, myRep, lastround, rvals=None, nround=0, **kwargs):
     '''Ignores mvals, instead sums lastround history (stored in rvals)
     to compute pCoop as PL using pseudocounts.
 
     * p_i is inferred from binomial model given r,n counts and uninformative
-      prior. 
+      prior, over the entire history. 
     '''
     if rvals is None:
         rvals = numpy.zeros(len(mvals), int)
@@ -67,6 +107,21 @@ def infer_empirical(n, mvals, myRep, lastround, rvals=None, nround=0, **kwargs):
     pCoop =  (rvals + 1.) / (nround + 2.) # estimate with pseudocounts
     return dict(pCoop=pCoop, rvals=rvals, nround=nround)
 
+
+def recent_empirical(n, mvals, myRep, lastround, rvals=None, nround=0, 
+                     keepRounds=10, **kwargs):
+    """uses last 10 rounds of each player's moves (vs. me) to estimate
+    p(coop).  Good for detecting if player switches to different theta
+    vs. me than vs. everyone else."""
+    if rvals is None: # 1st round so initialize storage of keepRounds rounds
+        rvals = numpy.zeros((len(mvals), keepRounds), int)
+    else:
+        rvals[:,:-1] = rvals[:,1:] # shift history back one step
+    rvals[:,-1] = lastround # save last move (vs. me) of each player
+    if nround < numpy.shape(rvals)[1]: # count rounds until rvals full
+        nround += 1
+    pCoop =  (rvals.sum(axis=1) + 1.) / (nround + 2.) # use pseudocounts
+    return dict(pCoop=pCoop, rvals=rvals, nround=nround)
 
 
 
@@ -80,17 +135,23 @@ def remap_reID(reIDs, d):
     for k,v in d.items():
         if not isinstance(v, numpy.ndarray):
             continue # not an array, no need to remap
-        if isinstance(v[0], int):
-            a = numpy.zeros(len(reIDs), int)
+        sh = numpy.shape(v)
+        if len(sh) > 1:
+            a = numpy.zeros((len(reIDs),) + sh[1:], v.dtype)
         else:
-            a = numpy.zeros(len(reIDs))
+            a = numpy.zeros(len(reIDs), v.dtype)
         for i,reID in enumerate(reIDs):
             a[i] = v[reID]
         d[k] = a
 
 
 class PLModel(object):
-    def __init__(self, models):
+    def __init__(self, models=(iid_binomial, 
+                               iid_binomial_last,
+                               top_binomial,
+                               top_binomial_last,
+                               iid_empirical,
+                               recent_empirical)):
         self.models = models
         self.data = [{} for m in models] # empty dict = uninformative prior
 
