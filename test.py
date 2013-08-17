@@ -1,6 +1,7 @@
 import numpy
 import infercoop
 from scipy import stats
+import random
 
 gm = numpy.array(((0, -3), (1, -2)))
 
@@ -34,7 +35,7 @@ def coop_payout(n, k, r1, r2):
     return ((k - 1) * r1_r2_payout(r1, r1) + (n - k) * r1_r2_payout(r2, 0.),
             k * r1_r2_payout(0., r2) + (n - k - 1) * r1_r2_payout(0., 0.))
 
-def pl_test(nplayers=10, theta=0.5, nrounds=20):
+def pl_test(nplayers=10, theta=0.5, nrounds=20, shuffle=True, showModel=False):
     '''Basic test of PLModel:
     just generates IID players with specified theta,
     player 0 is allD
@@ -45,7 +46,9 @@ def pl_test(nplayers=10, theta=0.5, nrounds=20):
     others = stats.binom(nplayers - 2, theta)
     single = stats.binom(1, theta)
     pl = infercoop.PLModel()
+    pl2 = infercoop.PLModel()
     n = 0
+    old = range(nplayers - 1) # start with identity mapping
     for i in range(nrounds):
         n += nplayers - 1 # total number of games each player has played
         mvals += others.rvs(nplayers)
@@ -54,12 +57,59 @@ def pl_test(nplayers=10, theta=0.5, nrounds=20):
         mvals[0] = lastround[0] = 0 # an allD player
         mvals[1] = n # an allC player
         lastround[1] = 1
-        pCoop = pl(range(nplayers - 1), n, mvals[:-1], mvals[-1], 
-                   lastround[:-1], None) # compute PL p(coop) for each player
-        print pCoop
-    print '\n\nFinal model data:'
-    print pl.data
+        if shuffle:
+            old, reIDs, out, outlast = random_map(old, mvals[:-1], 
+                                                  lastround[:-1])
+            #print old, reIDs
+            #print mvals[:-1], out
+        else:
+            reIDs = make_map(old, old)
+            out = map_mvals(old, mvals[:-1])
+            outlast = map_mvals(old, lastround[:-1])
+        pCoop = pl(reIDs, n, out, mvals[-1], 
+                   outlast, None) # compute PL p(coop) for each player
+        pCoop2 = pl2(range(nplayers - 1), n, mvals[:-1], mvals[-1], 
+                     lastround[:-1], None) # compute PL p(coop) for each player
+        pCoop0 = numpy.zeros(len(pCoop))
+        for i,j in enumerate(old):
+            pCoop0[j] = pCoop[i]
+        print '\n\n------------------\nPL under shuffled vs. unshuffled model'
+        print pCoop0
+        print pCoop2
+        if showModel:
+            print '\n\nmodel data:'
+            data = [d.copy() for d in pl.data]
+            mapBack = numpy.zeros(len(old), int)
+            for i,j in enumerate(old):
+                mapBack[j] = i
+            for d in data:
+                infercoop.remap_reID(mapBack, d)
+            print data
+            print '\n\nmodel data 2:'
+            print pl2.data
 
 
     
     
+def make_map(old, new):
+    oldIDs = numpy.zeros(len(old), int)
+    for i,j in enumerate(old):
+        oldIDs[j] = i
+    reIDs = numpy.zeros(len(new), int)
+    for i,j in enumerate(new):
+        reIDs[i] = oldIDs[j]
+    return reIDs
+
+def map_mvals(new, mvals):
+    out = numpy.zeros(len(mvals), int)
+    for i,j in enumerate(new):
+        out[i] = mvals[j]
+    return out
+
+def random_map(old, mvals, lastround):
+    new = [i for i in old]
+    random.shuffle(new)
+    reIDs = make_map(old, new)
+    out = map_mvals(new, mvals)
+    outlast = map_mvals(old, lastround)
+    return new, reIDs, out, outlast

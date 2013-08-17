@@ -21,7 +21,8 @@ def iid_binomial_last(n, mvals, my_m, mvalsLast=None, nLast=0, **kwargs):
         pCoop =  numpy.where(condition, (mvalsRound + 1.) / (nRound + 2.), 0.5)
     else: # treat as first round
         pCoop = (mvals + 1.) / (n + 2.)
-    return dict(pCoop=pCoop, mvalsLast=mvals, nLast=n) # save last round info
+    return dict(pCoop=pCoop, mvalsLast=numpy.array(mvals), 
+                nLast=n) # save last round info
 
 
 
@@ -87,7 +88,8 @@ def top_binomial_last(n, mvals, my_m, mvalsLast=None, nLast=0, pRandom=0.1,
                     + pRandom * (1. - pRank)
             else: # something wrong with mapping, so treat as uncertain
                 pCoop[i] = 0.5
-    return dict(pCoop=pCoop, mvalsLast=mvals, nLast=n) # save last round info
+    return dict(pCoop=pCoop, mvalsLast=numpy.array(mvals), 
+                nLast=n) # save last round info
 
 
 # empirical approach
