@@ -40,36 +40,45 @@ def pl_test(nplayers=10, theta=0.5, nrounds=20, shuffle=True, showModel=False):
     just generates IID players with specified theta,
     player 0 is allD
     player 1 is allC
+    player 2 is TFT
+    player 3 is WSLS
     Runs PL calculation on them. 
     Uses a constant (identity) reID mapping.'''
-    mvals = numpy.zeros(nplayers, int) # reputations
+    mvals = numpy.zeros(nplayers - 1, int) # reputations
     others = stats.binom(nplayers - 2, theta)
     single = stats.binom(1, theta)
     pl = infercoop.PLModel()
     pl2 = infercoop.PLModel()
-    n = 0
+    n = myRep = wsls = 0
     old = range(nplayers - 1) # start with identity mapping
+    lastroundMe = numpy.zeros(nplayers - 1)
     for i in range(nrounds):
         n += nplayers - 1 # total number of games each player has played
-        mvals += others.rvs(nplayers)
-        lastround = single.rvs(nplayers) # moves played vs. me this round
-        mvals += lastround # total rep of each player, mvals[-1] is my rep
+        mvals += others.rvs(nplayers - 1)
+        lastround = single.rvs(nplayers - 1) # moves played vs. me last round
+        lastround[2] = lastroundMe[2] # a TFT player
+        lastround[3] = wsls = wsls * lastroundMe[3] \
+            + (1 - wsls) * (1 - lastroundMe[3]) # a WSLS player
+        lastroundMe = single.rvs(nplayers - 1) # moves played by me last round
+        myRep += lastroundMe.sum()
+        mvals += lastround # total rep of each player
         mvals[0] = lastround[0] = 0 # an allD player
         mvals[1] = n # an allC player
         lastround[1] = 1
         if shuffle:
-            old, reIDs, out, outlast = random_map(old, mvals[:-1], 
-                                                  lastround[:-1])
+            old, reIDs, out, outlast, outlastMe = \
+                random_map(old, mvals, lastround, lastroundMe)
             #print old, reIDs
-            #print mvals[:-1], out
-        else:
+            #print mvals, out
+        else: # test mapping code on trivial mapping
             reIDs = make_map(old, old)
-            out = map_mvals(old, mvals[:-1])
-            outlast = map_mvals(old, lastround[:-1])
-        pCoop = pl(reIDs, n, out, mvals[-1], 
-                   outlast, None) # compute PL p(coop) for each player
-        pCoop2 = pl2(range(nplayers - 1), n, mvals[:-1], mvals[-1], 
-                     lastround[:-1], None) # compute PL p(coop) for each player
+            out = map_mvals(old, mvals)
+            outlast = map_mvals(old, lastround)
+            outlastMe = map_mvals(old, lastroundMe)
+        pCoop = pl(reIDs, n, out, myRep,
+                   outlast, outlastMe) # compute PL p(coop) for each player
+        pCoop2 = pl2(range(nplayers - 1), n, mvals, myRep, 
+                     lastround, lastroundMe) # compute PL p(coop) for each player
         pCoop0 = numpy.zeros(len(pCoop))
         for i,j in enumerate(old):
             pCoop0[j] = pCoop[i]
@@ -106,10 +115,11 @@ def map_mvals(new, mvals):
         out[i] = mvals[j]
     return out
 
-def random_map(old, mvals, lastround):
+def random_map(old, mvals, lastround, lastroundMe):
     new = [i for i in old]
     random.shuffle(new)
     reIDs = make_map(old, new)
     out = map_mvals(new, mvals)
     outlast = map_mvals(old, lastround)
-    return new, reIDs, out, outlast
+    outlastMe = map_mvals(old, lastroundMe)
+    return new, reIDs, out, outlast, outlastMe

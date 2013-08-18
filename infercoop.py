@@ -126,7 +126,15 @@ def recent_empirical(n, mvals, myRep, lastround, rvals=None, nround=0,
     return dict(pCoop=pCoop, rvals=rvals, nround=nround)
 
 
+def tft(n, mvals, myRep, lastround, lastroundMe, pGenerous=0.05, **kwargs):
+    'generous tit for tat'
+    pCoop = numpy.where(lastroundMe, 1., pGenerous)
+    return dict(pCoop=pCoop)
 
+def wsls(n, mvals, myRep, lastround, lastroundMe, pws=0.99, **kwargs):
+    'win-stay-lose-shift'
+    pCoop = numpy.where(lastroundMe, pws * lastround, 1. - pws * lastround)
+    return dict(pCoop=pCoop)
 
 
 ###############################################################
@@ -153,7 +161,9 @@ class PLModel(object):
                                top_binomial,
                                top_binomial_last,
                                iid_empirical,
-                               recent_empirical)):
+                               recent_empirical,
+                               tft,
+                               wsls)):
         self.models = models
         self.data = [{} for m in models] # empty dict = uninformative prior
 
