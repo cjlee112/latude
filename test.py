@@ -35,7 +35,7 @@ def coop_payout(n, k, r1, r2):
     return ((k - 1) * r1_r2_payout(r1, r1) + (n - k) * r1_r2_payout(r2, 0.),
             k * r1_r2_payout(0., r2) + (n - k - 1) * r1_r2_payout(0., 0.))
 
-def pl_test(nplayers=10, theta=0.5, nrounds=20, shuffle=True, showModel=False):
+def pl_test(nplayers=10, theta=0.5, nrounds=20, shuffle=False, showModel=False):
     '''Basic test of PLModel:
     just generates IID players with specified theta,
     player 0 is allD
@@ -75,10 +75,8 @@ def pl_test(nplayers=10, theta=0.5, nrounds=20, shuffle=True, showModel=False):
             out = map_mvals(old, mvals)
             outlast = map_mvals(old, lastround)
             outlastMe = map_mvals(old, lastroundMe)
-        pCoop = pl(reIDs, n, out, myRep,
-                   outlast, outlastMe) # compute PL p(coop) for each player
-        pCoop2 = pl2(range(nplayers - 1), n, mvals, myRep, 
-                     lastround, lastroundMe) # compute PL p(coop) for each player
+        pCoop = pl(outlast, outlastMe) # compute PL p(coop) for each player
+        pCoop2 = pl2(lastround, lastroundMe) # compute PL p(coop) for each player
         pCoop0 = numpy.zeros(len(pCoop))
         for i,j in enumerate(old):
             pCoop0[j] = pCoop[i]
