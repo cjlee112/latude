@@ -1,6 +1,11 @@
 import random
 from scipy import stats
 from math import log
+from numpy import linalg
+import numpy
+
+##################################################################
+# information metric calculations
 
 def binary_relent(omega, psi):
     return omega * log(omega / psi) \
@@ -37,6 +42,10 @@ def calc_info_gains(lastgame, state):
     l.sort()
     return l
 
+##################################################################
+# player classes
+# each has get_move(lastgame) method that returns move based on lastgame
+
 class InferencePlayer(object):
     def __init__(self):
         self.state = initial_state()
@@ -70,6 +79,9 @@ class MarkovPlayer(object):
         else:
             return 'D'
 
+##################################################################
+# basic simulations
+ 
 def swap_moves(game):
     return game[1] + game[0]
 
@@ -84,3 +96,37 @@ def twoplayer_game(pvec=None, nround=100, lastgame = 'CC'):
         move2 = markovPlayer.get_move(swap_moves(lastgame))
         lastgame = move1 + move2
     return l, inferencePlayer, markovPlayer
+
+##################################################################
+# score optimization
+
+def stationary_dist(t, epsilon=1e-10):
+    'compute stationary dist from transition matrix'
+    diff = 1.
+    while diff > epsilon:
+        t = linalg.matrix_power(t, 2)
+        w = t.sum(axis=1) # get row sums
+        t /= w.reshape((len(w), 1)) # normalize each row
+        m = numpy.mean(t, axis=0)
+        diff = numpy.dot(m, t) - m
+        diff = (diff * diff).sum()
+    return m
+
+def stationary_rates(myProbs, hisProbs0):
+    'compute expectation rates of all possible transitions for strategy pair'
+    # have to swap moves for other player...
+    hisProbs = (hisProbs0[0], hisProbs0[2],hisProbs0[1], hisProbs0[3])
+    l = []
+    for i,myP in enumerate(myProbs):
+        hisP = hisProbs[i]
+        l.append((myP * hisP, myP * (1. - hisP), 
+                  (1. - myP) * hisP, (1. - myP) * (1. - hisP)))
+    t = numpy.array(l)
+    s = stationary_dist(t)
+    return [p * t[i] for (i,p) in enumerate(s)]
+
+def stationary_score(myProbs, hisProbs, scores):
+    'compute expectation score for my strategy vs. opponent strategy'
+    rates = stationary_rates(myProbs, hisProbs)
+    l = [scores * vec for vec in rates]
+    return numpy.array(l).sum()
