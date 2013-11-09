@@ -112,6 +112,16 @@ def stationary_dist(t, epsilon=1e-10):
         diff = (diff * diff).sum()
     return m
 
+def stationary_dist2(t, epsilon=.001):
+    'compute stationary distribution using eigenvector method'
+    w, v = linalg.eig(t.transpose())
+    for i,eigenval in enumerate(w):
+        s = numpy.real_if_close(v[:,i]) # handle small complex number errors
+        s /= s.sum() # normalize
+        if abs(eigenval - 1.) <= epsilon and (s >= 0.).sum() == len(s):
+            return s # must have unit eigenvalue and all non-neg components
+    raise ValueError('no stationary eigenvalue??')
+
 def stationary_rates(myProbs, hisProbs0):
     'compute expectation rates of all possible transitions for strategy pair'
     # have to swap moves for other player...
@@ -122,7 +132,7 @@ def stationary_rates(myProbs, hisProbs0):
         l.append((myP * hisP, myP * (1. - hisP), 
                   (1. - myP) * hisP, (1. - myP) * (1. - hisP)))
     t = numpy.array(l)
-    s = stationary_dist(t)
+    s = stationary_dist2(t)
     return [p * t[i] for (i,p) in enumerate(s)]
 
 def stationary_score(myProbs, hisProbs, scores):
@@ -132,6 +142,7 @@ def stationary_score(myProbs, hisProbs, scores):
     return numpy.array(l).sum()
 
 def generate_corners(epsilon=0.01):
+    'generate all corners of 4D unit hypercube, with error rate epsilon'
     p = 1. - epsilon
     for move in range(16):
         myProbs = []
@@ -143,6 +154,7 @@ def generate_corners(epsilon=0.01):
         yield myProbs
 
 def optimal_corner(hisProbs, scores, **kwargs):
+    'find best strategy in response to a given 4D strategy'
     l = []
     for myProbs in generate_corners(**kwargs):
         l.append((stationary_score(myProbs, hisProbs, scores), myProbs))
@@ -150,6 +162,7 @@ def optimal_corner(hisProbs, scores, **kwargs):
     return l
 
 def all_vs_all(scores, **kwargs):
+    'rank all possible strategies by their minimum score vs. all strategies'
     l = []
     for myProbs in generate_corners(**kwargs):
         l.append((min([(stationary_score(myProbs, hisProbs, scores), hisProbs)
