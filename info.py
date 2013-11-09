@@ -130,3 +130,31 @@ def stationary_score(myProbs, hisProbs, scores):
     rates = stationary_rates(myProbs, hisProbs)
     l = [scores * vec for vec in rates]
     return numpy.array(l).sum()
+
+def generate_corners(epsilon=0.01):
+    p = 1. - epsilon
+    for move in range(16):
+        myProbs = []
+        for i in range(4):
+            if (move >> i) & 1:
+                myProbs.append(p)
+            else:
+                myProbs.append(epsilon)
+        yield myProbs
+
+def optimal_corner(hisProbs, scores, **kwargs):
+    l = []
+    for myProbs in generate_corners(**kwargs):
+        l.append((stationary_score(myProbs, hisProbs, scores), myProbs))
+    l.sort()
+    return l
+
+def all_vs_all(scores, **kwargs):
+    l = []
+    for myProbs in generate_corners(**kwargs):
+        l.append((min([(stationary_score(myProbs, hisProbs, scores), hisProbs)
+                       for hisProbs in generate_corners(**kwargs)]), myProbs))
+    l.sort()
+    return l
+
+            
