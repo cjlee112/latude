@@ -122,8 +122,8 @@ def stationary_dist2(t, epsilon=.001):
             return s # must have unit eigenvalue and all non-neg components
     raise ValueError('no stationary eigenvalue??')
 
-def stationary_rates(myProbs, hisProbs0):
-    'compute expectation rates of all possible transitions for strategy pair'
+def game_transition_matrix(myProbs, hisProbs0):
+    'compute transition rate matrix for a strategy pair'
     # have to swap moves for other player...
     hisProbs = (hisProbs0[0], hisProbs0[2],hisProbs0[1], hisProbs0[3])
     l = []
@@ -131,7 +131,11 @@ def stationary_rates(myProbs, hisProbs0):
         hisP = hisProbs[i]
         l.append((myP * hisP, myP * (1. - hisP), 
                   (1. - myP) * hisP, (1. - myP) * (1. - hisP)))
-    t = numpy.array(l)
+    return numpy.array(l)
+
+def stationary_rates(myProbs, hisProbs):
+    'compute expectation rates of all possible transitions for strategy pair'
+    t = game_transition_matrix(myProbs, hisProbs)
     s = stationary_dist2(t)
     return [p * t[i] for (i,p) in enumerate(s)]
 
