@@ -174,4 +174,23 @@ def all_vs_all(scores, **kwargs):
     l.sort()
     return l
 
+
+def population_optimum(myFrac, hisFrac, hisProbs, scores, epsilon=0.05):
+    'find optimal corner strategy at the specified population fraction'
+    l = []
+    for myProbs in generate_corners(epsilon):
+        sAB = stationary_score(myProbs, hisProbs, scores)
+        sBA = stationary_score(hisProbs, myProbs, scores)
+        l.append((hisFrac * sAB - myFrac * sBA, myProbs))
+    l.sort()
+    return l[-1]
             
+def population_diff(myFrac, myProbs, hisProbs, scores, epsilon=0.05):
+    'compute relative score for strategy pair at specified population fraction'
+    allC = (1. - epsilon, 1. - epsilon, 1. - epsilon, 1. - epsilon)
+    sAA = stationary_score(allC, allC, scores)
+    sBB = stationary_score(hisProbs, hisProbs, scores)
+    sAB = stationary_score(myProbs, hisProbs, scores)
+    sBA = stationary_score(hisProbs, myProbs, scores)
+    return myFrac * sAA + (1. - myFrac) * sAB \
+        - (1. - myFrac) * sBB - myFrac * sBA 
