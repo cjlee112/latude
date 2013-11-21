@@ -44,14 +44,14 @@ def calc_info_gains(lastgame, state):
 
 ##################################################################
 # player classes
-# each has get_move(lastgame) method that returns move based on lastgame
+# each has next_move(lastgame) method that returns move based on lastgame
 
 class InferencePlayer(object):
     def __init__(self):
         self.state = initial_state()
         self.lastgame = None
         
-    def get_move(self, lastgame=None):
+    def next_move(self, lastgame=None):
         if lastgame:
             if self.lastgame: # keep stats on opponent's move
                 counts = self.state[self.lastgame]
@@ -74,7 +74,8 @@ class MarkovPlayer(object):
         if not pvec:
             pvec = [random.random() for i in range(4)]
         self.pdict = dict(CC=pvec[0], CD=pvec[1], DC=pvec[2], DD=pvec[3])
-    def get_move(self, lastgame=None):
+        
+    def next_move(self, lastgame=None):
         p = self.pdict[lastgame]
         if random.random() <= p:
             return 'C'
@@ -94,8 +95,8 @@ def twoplayer_game(pvec=None, nround=100, lastgame = 'CC'):
     for i in range(nround):
         Ip = inferencePlayer.calc_relent(markovPlayer.pdict)
         l.append(Ip)
-        move1 = inferencePlayer.get_move(lastgame)
-        move2 = markovPlayer.get_move(swap_moves(lastgame))
+        move1 = inferencePlayer.next_move(lastgame)
+        move2 = markovPlayer.next_move(swap_moves(lastgame))
         lastgame = move1 + move2
     return l, inferencePlayer, markovPlayer
 
@@ -120,50 +121,55 @@ def exact_stationary(p,q):
     s = numpy.array(s) / n
     return s
 
-def stationary_dist(t, epsilon=1e-10):
-    'compute stationary dist from transition matrix'
-    diff = 1.
-    while diff > epsilon:
-        t = linalg.matrix_power(t, 2)
-        w = t.sum(axis=1) # get row sums
-        t /= w.reshape((len(w), 1)) # normalize each row
-        m = numpy.mean(t, axis=0)
-        diff = numpy.dot(m, t) - m
-        diff = (diff * diff).sum()
-    return m
+#def stationary_dist(t, epsilon=1e-10):
+    #'compute stationary dist from transition matrix'
+    #diff = 1.
+    #while diff > epsilon:
+        #t = linalg.matrix_power(t, 2)
+        #w = t.sum(axis=1) # get row sums
+        #t /= w.reshape((len(w), 1)) # normalize each row
+        #m = numpy.mean(t, axis=0)
+        #diff = numpy.dot(m, t) - m
+        #diff = (diff * diff).sum()
+    #return m
 
-def stationary_dist2(t, epsilon=.001):
-    'compute stationary distribution using eigenvector method'
-    w, v = linalg.eig(t.transpose())
-    for i,eigenval in enumerate(w):
-        s = numpy.real_if_close(v[:,i]) # handle small complex number errors
-        s /= s.sum() # normalize
-        if abs(eigenval - 1.) <= epsilon and (s >= 0.).sum() == len(s):
-            return s # must have unit eigenvalue and all non-neg components
-    raise ValueError('no stationary eigenvalue??')
+#def stationary_dist2(t, epsilon=.001):
+    #'compute stationary distribution using eigenvector method'
+    #w, v = linalg.eig(t.transpose())
+    #for i,eigenval in enumerate(w):
+        #s = numpy.real_if_close(v[:,i]) # handle small complex number errors
+        #s /= s.sum() # normalize
+        #if abs(eigenval - 1.) <= epsilon and (s >= 0.).sum() == len(s):
+            #return s # must have unit eigenvalue and all non-neg components
+    #raise ValueError('no stationary eigenvalue??')
 
-def game_transition_matrix(myProbs, hisProbs0):
-    'compute transition rate matrix for a strategy pair'
-    # have to swap moves for other player...
-    hisProbs = (hisProbs0[0], hisProbs0[2],hisProbs0[1], hisProbs0[3])
-    l = []
-    for i,myP in enumerate(myProbs):
-        hisP = hisProbs[i]
-        l.append((myP * hisP, myP * (1. - hisP), 
-                  (1. - myP) * hisP, (1. - myP) * (1. - hisP)))
-    return numpy.array(l)
+#def game_transition_matrix(myProbs, hisProbs0):
+    #'compute transition rate matrix for a strategy pair'
+    ## have to swap moves for other player...
+    #hisProbs = (hisProbs0[0], hisProbs0[2],hisProbs0[1], hisProbs0[3])
+    #l = []
+    #for i,myP in enumerate(myProbs):
+        #hisP = hisProbs[i]
+        #l.append((myP * hisP, myP * (1. - hisP), 
+                  #(1. - myP) * hisP, (1. - myP) * (1. - hisP)))
+    #return numpy.array(l)
 
-def stationary_rates(myProbs, hisProbs):
-    'compute expectation rates of all possible transitions for strategy pair'
-    t = game_transition_matrix(myProbs, hisProbs)
-    s = stationary_dist2(t)
-    return [p * t[i] for (i,p) in enumerate(s)]
+#def stationary_rates(myProbs, hisProbs):
+    #'compute expectation rates of all possible transitions for strategy pair'
+    #t = game_transition_matrix(myProbs, hisProbs)
+    #s = stationary_dist2(t)
+    #return [p * t[i] for (i,p) in enumerate(s)]
+
+#def stationary_score(myProbs, hisProbs, scores):
+    #'compute expectation score for my strategy vs. opponent strategy'
+    #rates = stationary_rates(myProbs, hisProbs)
+    #l = [scores * vec for vec in rates]
+    #return numpy.array(l).sum()
 
 def stationary_score(myProbs, hisProbs, scores):
     'compute expectation score for my strategy vs. opponent strategy'
-    rates = stationary_rates(myProbs, hisProbs)
-    l = [scores * vec for vec in rates]
-    return numpy.array(l).sum()
+    s = exact_stationary(myProbs, hisProbs, scores)
+    return numpy.dot(s, numpy.array(scores))
 
 def generate_corners(epsilon=0.01):
     'generate all corners of 4D unit hypercube, with error rate epsilon'
@@ -193,7 +199,6 @@ def all_vs_all(scores, **kwargs):
                        for hisProbs in generate_corners(**kwargs)]), myProbs))
     l.sort()
     return l
-
 
 def population_optimum(myFrac, hisFrac, hisProbs, scores, epsilon=0.05):
     'find optimal corner strategy at the specified population fraction'
