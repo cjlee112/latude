@@ -21,7 +21,7 @@ def beta_gain(n, N, nsample=1000):
     l = [omega_gain(omega, n, N) for omega in rv.rvs(nsample)]
     return sum(l) / float(nsample)
 
-        
+    
 def initial_state():
     return dict(CC=[0,0], CD=[0,0], DC=[0,0], DD=[0,0])
 
@@ -50,6 +50,7 @@ class InferencePlayer(object):
     def __init__(self):
         self.state = initial_state()
         self.lastgame = None
+        
     def get_move(self, lastgame=None):
         if lastgame:
             if self.lastgame: # keep stats on opponent's move
@@ -60,6 +61,7 @@ class InferencePlayer(object):
             self.lastgame = lastgame
         gains = calc_info_gains(lastgame, self.state)
         return gains[-1][1] # choose with highest info gain
+    
     def calc_relent(self, truedict):
         l = []
         for k,p in truedict.items():
@@ -99,6 +101,24 @@ def twoplayer_game(pvec=None, nround=100, lastgame = 'CC'):
 
 ##################################################################
 # score optimization
+
+def exact_stationary(p,q):
+    """Using the Press and Dyson Formula where p and q are the conditional probability vectors."""
+    s = []
+    c1 = [-1 + p[0]*q[0], p[1]*q[2], p[2]*q[1], p[3]*q[3]]
+    c2 = [-1 + p[0], -1 + p[1], p[2], p[3]]
+    c3 = [-1 + q[0], q[2], -1 + q[1], q[3]]
+    
+    for i in range(4):
+        f = numpy.zeros(4)
+        f[i] = 1
+        m = numpy.matrix([c1,c2,c3,f])
+        d = linalg.det(m)
+        s.append(d)
+    # normalize
+    n = sum(s)
+    s = numpy.array(s) / n
+    return s
 
 def stationary_dist(t, epsilon=1e-10):
     'compute stationary dist from transition matrix'
