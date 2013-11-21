@@ -3,7 +3,6 @@ import numpy
 from scipy import stats
 
 import info
-import pygradesc
 
 class ConditionalPlayer(object):
     def __init__(self, p, id=None, first_move=None):
@@ -49,6 +48,16 @@ def example_play(ep=0.01, moves=10):
         choice2 = p2.next_move(info.swap_moves(history[-1]))
         history.append(choice1 + choice2)
 
+def inference_vs_conditional(p, moves=100):
+    p1 = info.InferencePlayer2()
+    p2 = ConditionalPlayer(p)
+    history = [p1.next_move() + p2.next_move()]
+    for i in range(moves):
+        yield history[-1]
+        choice1 = p1.next_move(history[-1])
+        choice2 = p2.next_move(info.swap_moves(history[-1]))
+        history.append(choice1 + choice2)
+
 def seed_population(a=10, b=20):
     population = []
     next_id = 0
@@ -64,7 +73,7 @@ def seed_population(a=10, b=20):
         next_id += 1
     return population
 
-def population_sim(rounds=100):
+def population_sim(rounds=1000):
     ## seed population
     population = seed_population()
     next_id = len(population)
@@ -73,9 +82,6 @@ def population_sim(rounds=100):
         ## fitness proportionate selection to reproduce
         ## randomly select one to die
         pass
-    
-
-
 
 ## Examples ##
 # ep = 0.01
@@ -88,22 +94,19 @@ def population_sim(rounds=100):
 ## ALL C
 #p = dict(zip(['CC','CD','DC','DD'],[1.-ep, 1.-ep, 1.-ep, 1.-ep]))
 
+if __name__ == '__main__':
+    ep = 0.05
+    # WSLS
+    p = [1.-ep, ep, ep, 1.-ep]
+    # GTFT
+    #ep = 0
+    #p = [1.-ep, ep, 1.-ep, ep]
+    # ALLC
+    #p = [1.-ep, 1.-ep, 1.-ep, 1.-ep]
+    # ALLD
+    #p = [ep, ep, ep, ep]
+    gen = inference_vs_conditional(p)
+    for play in gen:
+        print play
 
-#score = (3,0,5,1)
-##info.stationary_score(p,q, score)
 
-#ep = 0.05
-
-##p = [1-ep,ep,1-ep,ep]
-##q = [1-ep,ep,ep,1-ep]
-#q = [1-ep,1-ep,1-ep,1-ep]
-##r = stationary_rates(p,q)
-##d = stationary_dist(r)
-
-#func = lambda a,b,: -1. * info.stationary_score((a,b,0,0),q,score)
-
-#start = (0.5,0.5)
-#delta = 0.01
-#steps = 1000
-#for i, point in enumerate(pygradesc.minimize(func, start, delta, steps)):
-    #print point

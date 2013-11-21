@@ -1,8 +1,9 @@
 import random
-from scipy import stats
+from scipy import stats, optimize
 from math import log
 from numpy import linalg
 import numpy
+import functools
 
 ##################################################################
 # information metric calculations
@@ -30,8 +31,8 @@ def both_moves_gain(mymove, hismove, state):
     n, N = state[k]
     return beta_gain(n, N)
 
-def calc_info_gains(lastgame, state):
-    n, N = state[lastgame]
+def calc_info_gains(last_move, state):
+    n, N = state[last_move]
     psi = (n + 1.) / (N + 2.) # probability he'll cooperate this round
     l = []
     for mymove in 'CD':
@@ -42,24 +43,37 @@ def calc_info_gains(lastgame, state):
     l.sort()
     return l
 
+def calc_best_long_term_response(q, scores=[3,0,5,1]):
+    f = functools.partial(stationary_score, scores=scores, hisProbs=q)
+    p, _, _ = optimize.fmin_tnc(lambda p: -1* f(p), [0.5,0.5,0.5,0.5], bounds=[(0,1)]*4, approx_grad=True, messages=0)
+    print q,p
+    return p
+
 ##################################################################
 # player classes
-# each has next_move(lastgame) method that returns move based on lastgame
+# each has next_move(last_move) method that returns move based on last_move
 
 class InferencePlayer(object):
     def __init__(self):
         self.state = initial_state()
-        self.lastgame = None
-        
-    def next_move(self, lastgame=None):
-        if lastgame:
-            if self.lastgame: # keep stats on opponent's move
-                counts = self.state[self.lastgame]
+        self.last_move = None
+        self.is_first_move = True
+
+    def first_move(self):
+        return 'C'
+
+    def next_move(self, last_move=None):
+        if self.is_first_move:
+            self.is_first_move = False
+            return self.first_move()
+        if last_move:
+            if self.last_move: # keep stats on opponent's move
+                counts = self.state[self.last_move]
                 counts[1] += 1
-                if lastgame[1] == 'C':
+                if last_move[1] == 'C':
                     counts[0] += 1
-            self.lastgame = lastgame
-        gains = calc_info_gains(lastgame, self.state)
+            self.last_move = last_move
+        gains = calc_info_gains(last_move, self.state)
         return gains[-1][1] # choose with highest info gain
     
     def calc_relent(self, truedict):
@@ -69,14 +83,61 @@ class InferencePlayer(object):
             l.append(binary_relent(p, (n + 1.) / (N + 2.)))
         return sum(l)
 
+enum = dict(zip(['CC','CD','DC','DD'], range(4)))
+
+class InferencePlayer2(object):
+    def __init__(self):
+        self.state = initial_state()
+        self.last_move = None
+        self.is_first_move = True
+
+    def first_move(self):
+        return 'C'
+
+    def oppenent_conditionals(self):
+        q = []
+        for move in ['CC','CD','DC','DD']:
+            n, N = self.state[move]
+            psi = (n + 1.) / (N + 2.) # probability he'll cooperate this round
+            q.append(psi)
+        return q
+
+    def next_move(self, last_move=None):
+        if self.is_first_move:
+            self.is_first_move = False
+            return self.first_move()
+        if last_move:
+            if self.last_move: # keep stats on opponent's move
+                counts = self.state[self.last_move]
+                counts[1] += 1
+                if last_move[1] == 'C':
+                    counts[0] += 1
+            self.last_move = last_move
+        q = self.oppenent_conditionals()
+        p = calc_best_long_term_response(q)
+        r = p[enum[last_move]]
+        r2 = random.random()
+        if r2 < r:
+            return 'C'
+        return 'D'
+        
+    
+    #def calc_relent(self, truedict):
+        #l = []
+        #for k,p in truedict.items():
+            #n, N = self.state[swap_moves(k)]
+            #l.append(binary_relent(p, (n + 1.) / (N + 2.)))
+        #return sum(l)
+
+
 class MarkovPlayer(object):
     def __init__(self, pvec=None):
         if not pvec:
             pvec = [random.random() for i in range(4)]
         self.pdict = dict(CC=pvec[0], CD=pvec[1], DC=pvec[2], DD=pvec[3])
         
-    def next_move(self, lastgame=None):
-        p = self.pdict[lastgame]
+    def next_move(self, last_move=None):
+        p = self.pdict[last_move]
         if random.random() <= p:
             return 'C'
         else:
@@ -88,16 +149,16 @@ class MarkovPlayer(object):
 def swap_moves(game):
     return game[1] + game[0]
 
-def twoplayer_game(pvec=None, nround=100, lastgame = 'CC'):
+def twoplayer_game(pvec=None, nround=100, last_move = 'CC'):
     inferencePlayer = InferencePlayer()
     markovPlayer = MarkovPlayer(pvec)
     l = []
     for i in range(nround):
         Ip = inferencePlayer.calc_relent(markovPlayer.pdict)
         l.append(Ip)
-        move1 = inferencePlayer.next_move(lastgame)
-        move2 = markovPlayer.next_move(swap_moves(lastgame))
-        lastgame = move1 + move2
+        move1 = inferencePlayer.next_move(last_move)
+        move2 = markovPlayer.next_move(swap_moves(last_move))
+        last_move = move1 + move2
     return l, inferencePlayer, markovPlayer
 
 ##################################################################
@@ -168,7 +229,7 @@ def exact_stationary(p,q):
 
 def stationary_score(myProbs, hisProbs, scores):
     'compute expectation score for my strategy vs. opponent strategy'
-    s = exact_stationary(myProbs, hisProbs, scores)
+    s = exact_stationary(myProbs, hisProbs)
     return numpy.dot(s, numpy.array(scores))
 
 def generate_corners(epsilon=0.01):
