@@ -45,7 +45,7 @@ def calc_info_gains(last_move, state):
 
 def calc_best_long_term_response(q, scores=[3,0,5,1]):
     f = functools.partial(stationary_score, scores=scores, hisProbs=q)
-    p, _, _ = optimize.fmin_tnc(lambda p: -1* f(p), [0.5,0.5,0.5,0.5], bounds=[(0,1)]*4, approx_grad=True, messages=0)
+    p, _, _ = optimize.fmin_tnc(lambda p: -1* f(p), [0.5,0.5,0.5,0.5], bounds=[(0,1)]*4, approx_grad=True, messages=0, maxfun=1000)
     print q,p
     return p
 

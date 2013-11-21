@@ -36,11 +36,7 @@ class ConditionalPlayer(object):
             return 'C'
         return 'D'
 
-def example_play(ep=0.01, moves=10):
-    p = [1.-ep, ep, ep, 1.-ep]
-    q = [ep, ep, ep, ep]
-    p1 = ConditionalPlayer(p)
-    p2 = ConditionalPlayer(q, first_move='D')
+def pvp(p1, p2, moves=100):
     history = [p1.next_move() + p2.next_move()]
     for i in range(moves):
         yield history[-1]
@@ -48,15 +44,25 @@ def example_play(ep=0.01, moves=10):
         choice2 = p2.next_move(info.swap_moves(history[-1]))
         history.append(choice1 + choice2)
 
+def example_play(ep=0.01, moves=20):
+    p = [1.-ep, ep, ep, 1.-ep]
+    q = [ep, ep, ep, ep]
+    p1 = ConditionalPlayer(p)
+    p2 = ConditionalPlayer(q, first_move='D')
+    return pvp(p1,p2, moves=moves)
+
 def inference_vs_conditional(p, moves=100):
     p1 = info.InferencePlayer2()
     p2 = ConditionalPlayer(p)
-    history = [p1.next_move() + p2.next_move()]
-    for i in range(moves):
-        yield history[-1]
-        choice1 = p1.next_move(history[-1])
-        choice2 = p2.next_move(info.swap_moves(history[-1]))
-        history.append(choice1 + choice2)
+    return pvp(p1, p2, moves=moves)
+
+def inference_vs_inference(moves=1000):
+    p1 = info.InferencePlayer2()
+    p2 = info.InferencePlayer2()
+    return pvp(p1, p2, moves=moves)
+
+#######################
+### Population games
 
 def seed_population(a=10, b=20):
     population = []
@@ -95,18 +101,21 @@ def population_sim(rounds=1000):
 #p = dict(zip(['CC','CD','DC','DD'],[1.-ep, 1.-ep, 1.-ep, 1.-ep]))
 
 if __name__ == '__main__':
-    ep = 0.05
-    # WSLS
-    p = [1.-ep, ep, ep, 1.-ep]
-    # GTFT
-    #ep = 0
-    #p = [1.-ep, ep, 1.-ep, ep]
-    # ALLC
-    #p = [1.-ep, 1.-ep, 1.-ep, 1.-ep]
-    # ALLD
-    #p = [ep, ep, ep, ep]
-    gen = inference_vs_conditional(p)
+    gen = inference_vs_inference()
     for play in gen:
         print play
+    #ep = 0.05
+    ## WSLS
+    ##p = [1.-ep, ep, ep, 1.-ep]
+    ## GTFT
+    ##ep = 0
+    ##p = [1.-ep, ep, 1.-ep, ep]
+    ## ALLC
+    ##p = [1.-ep, 1.-ep, 1.-ep, 1.-ep]
+    ## ALLD
+    #p = [ep, ep, ep, ep]
+    #gen = inference_vs_conditional(p)
+    #for play in gen:
+        #print play
 
 
