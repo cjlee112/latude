@@ -177,7 +177,6 @@ class InfogainStrategy(object):
         self.history.append(last_move)
         if self.hisIpMoves and self.hisIpMoves[-1] != last_move[1]:
             self.mismatches += 1
-        print myOdds, hisOdds
         return (hisOdds, myOdds)
     def match_pval(self, epsilon=0.05):
         'get p-value that opponent is an inference player (plays like me)'
@@ -225,11 +224,20 @@ class GroupPlayer(object):
                  strategyKwargs={}, **kwargs):
         self.nplayer = nplayer
         self.players = [klass(**strategyKwargs) for i in range(nplayer)]
+        self.klass = klass
+        self.strategyKwargs = strategyKwargs
     def next_move(self):
         return [p.next_move() for p in self.players]
     def save_outcome(self, outcomes):
         for i,p in enumerate(self.players):
             p.save_outcome(outcomes[i])
+    def replicate(self):
+        return self.__class__(self.nplayer, None, klass=self.klass,
+                              strategyKwargs=self.strategyKwargs)
+    def replace(self, i):
+        pass
+    def is_inference_player(self):
+        return False
 
 class InferGroupPlayer(object):
     def __init__(self, nplayer, scores, epsilon=0.05, nwait=10, 
@@ -259,8 +267,9 @@ class InferGroupPlayer(object):
         hisOdds = numpy.zeros(self.nplayer)
         for i,last_move in enumerate(outcomes):
             self.players[i].nround += 1
-            if self.players[i].nround > self.nwait: # use groupmax strategy
+            if self.players[i].nround == self.nwait: # use groupmax strategy
                 self.players[i].__class__ = GroupMaxStrategy
+            if hasattr(self, 'groupState'):
                 t = self.players[i].save_outcome(last_move, self.epsilon,
                        state=self.groupState, hisState=self.groupState)
             else:
@@ -289,10 +298,21 @@ class InferGroupPlayer(object):
         counts = numpy.array(l).sum(axis=0)
         self.groupState = dict(CC=counts[:2], DC=counts[2:4], 
                                CD=counts[4:6], DD=counts[6:]) # swap back!
-        groupStrategy = (counts[::2] + 1.) / (counts[1::2] + 2.)
-        s, r = moran_optimum(nIp, self.nplayer, groupStrategy, 
-                             self.scores, self.epsilon)
-        self.optimalStrategy = dict(CC=s[0], CD=s[1], DC=s[2], DD=s[3])
+        if not hasattr(self, 'optimalStrategy') or \
+                random.random() < 1. / self.nplayer: 
+            groupStrategy = (counts[::2] + 1.) / (counts[1::2] + 2.)
+            s, r = moran_optimum(nIp, self.nplayer, groupStrategy, 
+                                 self.scores, self.epsilon)
+            self.optimalStrategy = dict(CC=s[0], CD=s[1], DC=s[2], DD=s[3])
+    def replicate(self):
+        return self.__class__(self.nplayer, self.scores, self.epsilon, 
+                              self.nwait, self.initialPval)
+    def replace(self, i):
+        'replace player i with new, unknown strategy; restart inference'
+        self.players[i] = InfogainStrategy()
+        self.players[i].nround = 0
+    def is_inference_player(self):
+        return True
         
 
 class InferencePlayer2(object):
@@ -351,13 +371,13 @@ class MultiplayerTournament(object):
         self.epsilon = epsilon
         self.scoresDict = dict(CC=scores[0], CD=scores[1], DC=scores[2],
                                DD=scores[3])
+        self.nround = 0
     def do_round(self):
         'run one round of the tournament, and return total score of each player'
         moves = []
         for player in self.players:
             moves.append([move_with_error(m, self.epsilon)
                           for m in player.next_move()])
-        print moves
         scores = []
         for i,player in enumerate(self.players):
             oppMoves = [moves[j][i - 1] for j in range(i)] \
@@ -365,15 +385,33 @@ class MultiplayerTournament(object):
             outcomes = [(t[0] + t[1]) for t in zip(moves[i], oppMoves)]
             player.save_outcome(outcomes)
             scores.append(sum([self.scoresDict[g] for g in outcomes]))
+        self.nround += 1
         return scores
-    def replace(self, i, newPlayer):
+    def replace(self, die, replicate):
         'replace player i with newPlayer'
-        self.players[i] = newPlayer
+        self.players[die] = self.players[replicate].replicate()
         for j,player in enumerate(self.players):
-            if j < i:
-                player.replace(i - 1)
-            elif j > i:
-                player.replace(i)
+            if j < die:
+                player.replace(die - 1)
+            elif j > die:
+                player.replace(die)
+    def report(self, scores):
+        s = n = 0.
+        for i,p in enumerate(self.players):
+            if p.is_inference_player():
+                s += scores[i]
+                n += 1
+        if n > 0 and n < len(scores):
+            return n, (s / n) / ((sum(scores) - s) / (len(scores) - n))
+    def count_inference_players(self):
+        return sum([1 for p in self.players if p.is_inference_player()])
+
+    def fixation_status(self):
+        nIp = self.count_inference_players()
+        if nIp == 0:
+            return False
+        elif nIp == self.nplayer:
+            return True
 
 def build_tournament(nIp, n, pvec=None, scores=(3,0,5,1), epsilon=0.05):
     if pvec is None:
@@ -382,7 +420,38 @@ def build_tournament(nIp, n, pvec=None, scores=(3,0,5,1), epsilon=0.05):
     while len(l) < n:
         l.append(GroupPlayer(n - 1, scores, strategyKwargs=dict(pvec=pvec)))
     return MultiplayerTournament(l, epsilon, scores)
- 
+
+def moran_selection(scores):
+    'get index of player to replicate, player to kill'
+    total = sum(scores)
+    replicant = random.random() * total
+    r = 0.
+    for i,s in enumerate(scores):
+        r += s
+        if replicant <= r:
+            break
+    return i, random.randrange(len(scores))
+
+def run_tournament(nIp, n, pvec=None, selectionFunction=moran_selection,
+                   **kwargs):
+    tour = build_tournament(nIp, n, pvec, **kwargs)
+    fixed = None
+    while fixed is None:
+        scores = tour.do_round()
+        replicate, die = selectionFunction(scores)
+        if replicate != die:
+            tour.replace(die, replicate)
+        #print tour.report(scores)
+        fixed = tour.fixation_status()
+    return fixed, tour.nround
+
+class Runner(object):
+    def __init__(self, *args):
+        self.args = args
+
+    def __call__(self, v):
+        return run_tournament(*self.args)
+
 def swap_moves(game):
     if game:
         return game[1] + game[0]
@@ -570,8 +639,10 @@ def fitness_ratio(myFrac, hisFrac, myProbs, hisProbs, scores, myBase, hisBase):
     sAB, sBA = reciprocal_scores(myProbs, hisProbs, scores)
     return (myBase + hisFrac * sAB) / (hisBase + myFrac * sBA)
 
-def moran_optimum(m, n, hisProbs, scores, epsilon=0.05):
+def moran_optimum(m, n, hisProbs, scores, epsilon=0.05, start=None):
     'find strategy that maximizes fitness ratio vs. opponent'
+    if start is None:
+        start = (0.5, 0.5, 0.5, 0.5)
     sAA, sBB = self_scores(hisProbs, scores, epsilon)
     myBase = sAA * float(m) / n
     hisFrac = float(n - m) / n
@@ -581,7 +652,7 @@ def moran_optimum(m, n, hisProbs, scores, epsilon=0.05):
                           -fitness_ratio(myFrac, hisFrac,
                                          add_noise_vector(myProbs, epsilon), 
                                          hisProbs, scores, myBase, hisBase),
-                          [0.5,0.5,0.5,0.5], bounds=[(0,1)]*4, 
+                          start, bounds=[(0,1)]*4, 
                           approx_grad=True, messages=0, maxfun=1000)[0]
     return s, fitness_ratio(myFrac, hisFrac, add_noise_vector(s, epsilon), 
                             hisProbs, scores, myBase, hisBase)
