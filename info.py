@@ -311,6 +311,8 @@ class InferGroupPlayer(object):
         'replace player i with new, unknown strategy; restart inference'
         self.players[i] = InfogainStrategy()
         self.players[i].nround = 0
+        self.hisIpLOD[i] = 0. # reset posterior odds ratios
+        self.myIpLOD[i] = 0.
     def is_inference_player(self):
         return True
         
