@@ -445,6 +445,20 @@ def run_tournament(nIp, n, pvec=None, selectionFunction=moran_selection,
         fixed = tour.fixation_status()
     return fixed, tour.nround
 
+def save_tournaments(nIp, nplayer, nmax=100, filename='out.log', **kwargs):
+    n = 0
+    while n < nmax:
+        t = run_tournament(nIp, nplayer, **kwargs)
+        print n, t
+        if t[0]:
+            fixed = 1
+        else:
+            fixed = 0
+        with open(filename, 'a') as ifile:
+            print >> ifile, '%d %d' % (fixed, t[1])
+        with open(filename, 'r') as ifile:
+            n = len(list(ifile))
+
 class Runner(object):
     def __init__(self, *args):
         self.args = args
