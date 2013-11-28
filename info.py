@@ -241,7 +241,7 @@ class GroupPlayer(object):
 
 class InferGroupPlayer(object):
     def __init__(self, nplayer, scores, epsilon=0.05, nwait=10, 
-                 initialPval=0.01):
+                 initialPval=0.01, optCycles=10):
         self.nplayer = nplayer
         self.myIpLOD = numpy.zeros(nplayer)
         self.hisIpLOD = numpy.zeros(nplayer)
@@ -253,6 +253,8 @@ class InferGroupPlayer(object):
         self.nwait = nwait
         self.epsilon = epsilon
         self.initialPval = initialPval
+        self.optCycles = optCycles
+        self.oldcounts = numpy.zeros(8) # counts from dead group-players
     def next_move(self):
         hisIpP = 1. / (numpy.exp(-self.hisIpLOD) + 1.)
         myIpP = 1. / (numpy.exp(-self.myIpLOD) + 1.)
@@ -295,11 +297,11 @@ class InferGroupPlayer(object):
             d = p.state # swap moves to his POV!
             v = numpy.array(d['CC'] + d['DC'] + d['CD'] + d['DD']) * post[i]
             l.append(v)
-        counts = numpy.array(l).sum(axis=0)
+        counts = numpy.array(l).sum(axis=0) + self.oldcounts
         self.groupState = dict(CC=counts[:2], DC=counts[2:4], 
                                CD=counts[4:6], DD=counts[6:]) # swap back!
         if not hasattr(self, 'optimalStrategy') or \
-                random.random() < 1. / self.nplayer: 
+                self.nround % self.optCycles == 0: # update optimal strategy 
             groupStrategy = (counts[::2] + 1.) / (counts[1::2] + 2.)
             s, r = moran_optimum(nIp, self.nplayer, groupStrategy, 
                                  self.scores, self.epsilon)
@@ -309,6 +311,10 @@ class InferGroupPlayer(object):
                               self.nwait, self.initialPval)
     def replace(self, i):
         'replace player i with new, unknown strategy; restart inference'
+        if self.hisIpLOD[i] < log(self.initialPval): # group player
+            d = self.players[i].state # swap moves to his POV!
+            v = numpy.array(d['CC'] + d['DC'] + d['CD'] + d['DD'])
+            self.oldcounts += v # save his counts
         self.players[i] = InfogainStrategy()
         self.players[i].nround = 0
         self.hisIpLOD[i] = 0. # reset posterior odds ratios
@@ -700,3 +706,7 @@ def add_noise(p, epsilon):
 def add_noise_vector(l, epsilon):
     return [add_noise(p, epsilon) for p in l]
 
+if __name__ == '__main__':
+    import sys
+    args = [int(s) for s in sys.argv[1:4]] + sys.argv[4:]
+    save_tournaments(*args)
