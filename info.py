@@ -1,6 +1,6 @@
 import random
 from scipy import stats, optimize
-from math import log
+from math import log, exp
 from numpy import linalg
 import numpy
 import functools
@@ -154,13 +154,14 @@ class InfogainStrategy(object):
         self.myIpMoves.append(myMove)
         self.hisIpMoves.append(hisMove)
         d = dict(C=1. - epsilon, D=epsilon)
-        self.myIpP = d[myMove]
-        self.hisIpP = d[hisMove]
+        self.myIpPC = d[myMove]
+        self.hisIpPC = d[hisMove]
         return myMove
     def save_outcome(self, last_move, epsilon=0.05, state=None, hisState=None):
         'get likelihood odds infogain model / binomial model for him & me'
-        if state is None:
+        if state is None: # during infogain phase, just use our mutual history
             state = self.state
+        if hisState is None: # he's in infogain phase, use our mutual history
             hisState = self.hisState
         if self.last_move:
             ctx = self.last_move
@@ -171,8 +172,8 @@ class InfogainStrategy(object):
             save_counts(last_move[0], self.hisState[ctx])
         else: # no history, so use uninformative prior
             hisOdds = myOdds = 2.
-        myOdds *= move_likelihood(self.myIpP, last_move[0])
-        hisOdds *= move_likelihood(self.hisIpP, last_move[1])
+        myOdds *= move_likelihood(self.myIpPC, last_move[0])
+        hisOdds *= move_likelihood(self.hisIpPC, last_move[1])
         self.last_move = last_move
         self.history.append(last_move)
         if self.hisIpMoves and self.hisIpMoves[-1] != last_move[1]:
@@ -185,22 +186,31 @@ class InfogainStrategy(object):
         b = stats.binom(len(self.hisIpMoves), epsilon)
         return b.sf(self.mismatches - 1)
 
-def groupmax_move_p(pIP, pCvsGroup, epsilon):
-    '''get stochastic move and associated probability under maxmode rules:
-    * always cooperate with an inference player
-    * apply pCvsGroup otherwise'''
-    pC = pIP + (1. - pIP) * pCvsGroup
-    myMove = stochastic_move(pC)
-    p = add_noise(pC, epsilon)
-    d = dict(C=p, D=1. - p)
-    return myMove, d[myMove]
-
 class GroupMaxStrategy(InfogainStrategy):
+    def start(self, myIpLOD=0., tau=0.01):
+        self.pPartner = 1. / (exp(-myIpLOD) + 1.)
+        self.tau = tau
+        self.last_move2 = self.last_move # keep history for 2 moves...
     def next_move(self, epsilon=0.05, hisP=0, myP=0, optimalStrategy=None):
-        myMove, self.myIpP = groupmax_move_p(hisP, 
-                optimalStrategy[self.last_move], epsilon)
-        hisMove, self.hisIpP = groupmax_move_p(myP, 
-                optimalStrategy[swap_moves(self.last_move)], epsilon)
+        if hisP > 0.5: # cooperate with any inference player
+            myMove = 'C'
+            self.myIpPC = 1. - epsilon
+        else: # apply optimal strategy vs. group
+            self.myIpPC = add_noise(optimalStrategy[self.last_move], epsilon)
+            myMove = stochastic_move(optimalStrategy[self.last_move])
+        # 2-state HMM for whether inf-player is partnering with us or not
+        p1 = ((1. - self.tau) * self.pPartner 
+              + self.tau * (1. - self.pPartner)) \
+            * move_likelihood(1. - epsilon, self.last_move[1]) # partner
+        ctx = swap_moves(self.last_move2)
+        p2 = (self.tau * self.pPartner 
+              + (1. - self.tau) * (1. - self.pPartner)) \
+              * move_likelihood(add_noise(optimalStrategy[ctx], epsilon),
+                                self.last_move[1]) # not partnering with me
+        self.pPartner = p = p1 / (p1 + p2)
+        pC = p + (1. - p) * optimalStrategy[swap_moves(self.last_move)]
+        self.hisIpPC = add_noise(pC, epsilon) # p(inf-player cooperates w/ me)
+        self.last_move2 = self.last_move
         return myMove
 
 class MarkovStrategy(object):
@@ -241,8 +251,9 @@ class GroupPlayer(object):
 
 class InferGroupPlayer(object):
     def __init__(self, nplayer, scores, epsilon=0.05, nwait=10, 
-                 initialPval=0.01, optCycles=10):
+                 initialPval=0.01, optCycles=100, nrecalc=10):
         self.nplayer = nplayer
+        self.priorIpLOD = 0.
         self.myIpLOD = numpy.zeros(nplayer)
         self.hisIpLOD = numpy.zeros(nplayer)
         self.players = [InfogainStrategy() for i in range(nplayer)]
@@ -255,6 +266,8 @@ class InferGroupPlayer(object):
         self.initialPval = initialPval
         self.optCycles = optCycles
         self.oldcounts = numpy.zeros(8) # counts from dead group-players
+        self.nIpCurrent = -99999 # force initial update
+        self.nrecalc = nrecalc
     def next_move(self):
         hisIpP = 1. / (numpy.exp(-self.hisIpLOD) + 1.)
         myIpP = 1. / (numpy.exp(-self.myIpLOD) + 1.)
@@ -271,9 +284,14 @@ class InferGroupPlayer(object):
             self.players[i].nround += 1
             if self.players[i].nround == self.nwait: # use groupmax strategy
                 self.players[i].__class__ = GroupMaxStrategy
+                self.players[i].start(self.myIpLOD[i])
             if hasattr(self, 'groupState'):
-                t = self.players[i].save_outcome(last_move, self.epsilon,
-                       state=self.groupState, hisState=self.groupState)
+                if self.players[i].nround > self.nwait:
+                    t = self.players[i].save_outcome(last_move, self.epsilon,
+                             state=self.groupState, hisState=self.groupState)
+                else: # other player cannot have groupState yet...
+                    t = self.players[i].save_outcome(last_move, self.epsilon,
+                             state=self.groupState)
             else:
                 t = self.players[i].save_outcome(last_move, self.epsilon)
             hisOdds[i] = t[0]
@@ -285,6 +303,8 @@ class InferGroupPlayer(object):
             return
         post = 1. / (numpy.exp(self.hisIpLOD) + 1.)
         nIp = (post < self.initialPval).sum() # count confident inf-players
+        p = (post.sum() + 1.) / (self.nplayer + 3.) # posterior estimate
+        self.priorIpLOD = log((1. - p) / p) # prior odds ratio
         if self.nround == self.nwait: # get group players by p-value
             post2 = numpy.zeros(self.nplayer)
             for i,p in enumerate(self.players):
@@ -300,8 +320,9 @@ class InferGroupPlayer(object):
         counts = numpy.array(l).sum(axis=0) + self.oldcounts
         self.groupState = dict(CC=counts[:2], DC=counts[2:4], 
                                CD=counts[4:6], DD=counts[6:]) # swap back!
-        if not hasattr(self, 'optimalStrategy') or \
+        if abs(self.nIpCurrent - nIp) >= self.nrecalc or \
                 self.nround % self.optCycles == 0: # update optimal strategy 
+            self.nIpCurrent = nIp # save new count
             groupStrategy = (counts[::2] + 1.) / (counts[1::2] + 2.)
             s, r = moran_optimum(nIp, self.nplayer, groupStrategy, 
                                  self.scores, self.epsilon)
@@ -317,7 +338,7 @@ class InferGroupPlayer(object):
             self.oldcounts += v # save his counts
         self.players[i] = InfogainStrategy()
         self.players[i].nround = 0
-        self.hisIpLOD[i] = 0. # reset posterior odds ratios
+        self.hisIpLOD[i] = self.priorIpLOD # reset posterior odds ratios
         self.myIpLOD[i] = 0.
     def is_inference_player(self):
         return True
