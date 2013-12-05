@@ -231,11 +231,12 @@ class MarkovStrategy(object):
 
 class GroupPlayer(object):
     def __init__(self, nplayer, scores, klass=MarkovStrategy, 
-                 strategyKwargs={}, **kwargs):
+                 strategyKwargs={}, name='M', **kwargs):
         self.nplayer = nplayer
         self.players = [klass(**strategyKwargs) for i in range(nplayer)]
         self.klass = klass
         self.strategyKwargs = strategyKwargs
+        self.name = name
     def next_move(self):
         return [p.next_move() for p in self.players]
     def save_outcome(self, outcomes):
@@ -243,7 +244,8 @@ class GroupPlayer(object):
             p.save_outcome(outcomes[i])
     def replicate(self):
         return self.__class__(self.nplayer, None, klass=self.klass,
-                              strategyKwargs=self.strategyKwargs)
+                              strategyKwargs=self.strategyKwargs, 
+                              name=self.name)
     def replace(self, i):
         pass
     def is_inference_player(self):
@@ -251,7 +253,7 @@ class GroupPlayer(object):
 
 class InferGroupPlayer(object):
     def __init__(self, nplayer, scores, epsilon=0.05, nwait=10, 
-                 initialPval=0.01, optCycles=100, nrecalc=10):
+                 initialPval=0.01, optCycles=100, nrecalc=10, name='I'):
         self.nplayer = nplayer
         self.priorIpLOD = 0.
         self.myIpLOD = numpy.zeros(nplayer)
@@ -268,6 +270,7 @@ class InferGroupPlayer(object):
         self.oldcounts = numpy.zeros(8) # counts from dead group-players
         self.nIpCurrent = -99999 # force initial update
         self.nrecalc = nrecalc
+        self.name = name
     def next_move(self):
         hisIpP = 1. / (numpy.exp(-self.hisIpLOD) + 1.)
         myIpP = 1. / (numpy.exp(-self.myIpLOD) + 1.)
@@ -329,7 +332,7 @@ class InferGroupPlayer(object):
             self.optimalStrategy = dict(CC=s[0], CD=s[1], DC=s[2], DD=s[3])
     def replicate(self):
         return self.__class__(self.nplayer, self.scores, self.epsilon, 
-                              self.nwait, self.initialPval)
+                              self.nwait, self.initialPval, name=self.name)
     def replace(self, i):
         'replace player i with new, unknown strategy; restart inference'
         if self.hisIpLOD[i] < log(self.initialPval): # group player
@@ -432,22 +435,27 @@ class MultiplayerTournament(object):
                 n += 1
         if n > 0 and n < len(scores):
             return n, (s / n) / ((sum(scores) - s) / (len(scores) - n))
-    def count_inference_players(self):
-        return sum([1 for p in self.players if p.is_inference_player()])
+    def count_players(self):
+        d = {}
+        for p in self.players:
+            d[p.name] = d.get(p.name, 0) + 1
+        return d
 
     def fixation_status(self):
-        nIp = self.count_inference_players()
-        if nIp == 0:
+        d = self.count_players()
+        if len(d) > 1:
             return False
-        elif nIp == self.nplayer:
-            return True
+        else:
+            return d.keys()[0]
 
-def build_tournament(nIp, n, pvec=None, scores=(3,0,5,1), epsilon=0.05):
+def build_tournament(nIp, n, pvec=None, scores=(3,0,5,1), epsilon=0.05,
+                     klass=InferGroupPlayer, **kwargs):
     if pvec is None:
         pvec = (1., 0., 1., 0.)
-    l = [InferGroupPlayer(n - 1, scores, epsilon) for i in range(nIp)]
+    l = [klass(n - 1, scores, epsilon) for i in range(nIp)]
     while len(l) < n:
-        l.append(GroupPlayer(n - 1, scores, strategyKwargs=dict(pvec=pvec)))
+        l.append(GroupPlayer(n - 1, scores, strategyKwargs=dict(pvec=pvec),
+                             **kwargs))
     return MultiplayerTournament(l, epsilon, scores)
 
 def moran_selection(scores):
@@ -462,11 +470,15 @@ def moran_selection(scores):
     return i, random.randrange(len(scores))
 
 def run_tournament(nIp, n, pvec=None, selectionFunction=moran_selection,
-                   **kwargs):
+                   selectionPeriod=1, **kwargs):
     tour = build_tournament(nIp, n, pvec, **kwargs)
-    fixed = None
-    while fixed is None:
+    fixed = False
+    i = 0
+    while not fixed:
         scores = tour.do_round()
+        i += 1
+        if i % selectionPeriod: # only apply selection once per selectionPeriod
+            continue
         replicate, die = selectionFunction(scores)
         if replicate != die:
             tour.replace(die, replicate)
@@ -478,13 +490,8 @@ def save_tournaments(nIp, nplayer, nmax=100, filename='out.log', **kwargs):
     n = 0
     while n < nmax:
         t = run_tournament(nIp, nplayer, **kwargs)
-        print n, t
-        if t[0]:
-            fixed = 1
-        else:
-            fixed = 0
         with open(filename, 'a') as ifile:
-            print >> ifile, '%d %d' % (fixed, t[1])
+            print >> ifile, '%s %d' % t
         with open(filename, 'r') as ifile:
             n = len(list(ifile))
 
