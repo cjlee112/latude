@@ -422,7 +422,8 @@ class MultiplayerTournament(object):
                 + [moves[j][i] for j in range(i + 1, self.nplayer)]
             outcomes = [(t[0] + t[1]) for t in zip(moves[i], oppMoves)]
             player.save_outcome(outcomes)
-            scores.append(sum([self.scoresDict[g] for g in outcomes]))
+            scores.append(sum([self.scoresDict[g] for g in outcomes])
+                          / float(len(outcomes))) # player's average score
         self.nround += 1
         return scores
     def replace(self, die, replicate):
