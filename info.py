@@ -458,7 +458,7 @@ class MultiplayerTournament(object):
 class MultiplayerTournament2(MultiplayerTournament):
     'do not reset player unless replaced by a different type'
     def replace(self, die, replicate):
-        if self.players[die].__class__ == self.players[replicate].__class__:
+        if self.players[die].name == self.players[replicate].name:
             return # if same type, do nothing
         return MultiplayerTournament.replace(self, die, replicate)
 
