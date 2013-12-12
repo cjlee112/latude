@@ -732,13 +732,16 @@ def moran_optimum(m, n, hisProbs, scores, epsilon=0.05, start=None,
                           approx_grad=True, messages=0, maxfun=1000)[0]
     return s, -negFunc(s)
 
-def diff_optimum(m, n, hisProbs, scores, **kwargs):
+def diff_optimum(m, n, hisProbs, scores, epsilon=0.05, **kwargs):
     'find strategy that maximizes score difference'
     hisFrac = float(n - m) / n
     myFrac = float(m + 1) / n
     negFunc = lambda myProbs: \
-        -population_score_diff(myFrac, hisFrac, myProbs, hisProbs, scores)
-    return moran_optimum(m, n, hisProbs, scores, negFunc=negFunc, **kwargs)
+        -population_score_diff(myFrac, hisFrac, 
+                               add_noise_vector(myProbs, epsilon),
+                               hisProbs, scores)
+    return moran_optimum(m, n, hisProbs, scores, epsilon, negFunc=negFunc, 
+                         **kwargs)
 
 def population_diff(myFrac, myProbs, hisProbs, scores, hisFrac=None, 
                     epsilon=0.05):
