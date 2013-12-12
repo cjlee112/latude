@@ -280,7 +280,9 @@ class InferGroupPlayer(object):
                       optimalStrategy=getattr(self, 'optimalStrategy', None))
             moves.append(m)
         return moves
-    def save_outcome(self, outcomes):
+    def save_outcome(self, outcomes, optFunc=None):
+        if optFunc is None:
+            optFunc = moran_optimum
         myOdds = numpy.zeros(self.nplayer)
         hisOdds = numpy.zeros(self.nplayer)
         for i,last_move in enumerate(outcomes):
@@ -327,8 +329,8 @@ class InferGroupPlayer(object):
                 self.nround % self.optCycles == 0: # update optimal strategy 
             self.nIpCurrent = nIp # save new count
             groupStrategy = (counts[::2] + 1.) / (counts[1::2] + 2.)
-            s, r = moran_optimum(nIp, self.nplayer, groupStrategy, 
-                                 self.scores, self.epsilon)
+            s, r = optFunc(nIp, self.nplayer, groupStrategy, 
+                           self.scores, epsilon=self.epsilon)
             self.optimalStrategy = dict(CC=s[0], CD=s[1], DC=s[2], DD=s[3])
     def replicate(self):
         return self.__class__(self.nplayer, self.scores, self.epsilon, 
@@ -346,6 +348,10 @@ class InferGroupPlayer(object):
     def is_inference_player(self):
         return True
         
+class InferGroupPlayer2(InferGroupPlayer):
+    'maximizes difference in scores rather than ratio'
+    def save_outcome(self, outcomes):
+        return InferGroupPlayer.save_outcome(self, outcomes, diff_optimum)
 
 class InferencePlayer2(object):
     def __init__(self):
@@ -448,15 +454,23 @@ class MultiplayerTournament(object):
         else:
             return d.keys()[0]
 
+class MultiplayerTournament2(MultiplayerTournament):
+    'do not reset player unless replaced by a different type'
+    def replace(self, die, replicate):
+        if self.players[die].__class__ == self.players[replicate].__class__:
+            return # if same type, do nothing
+        return MultiplayerTournament.replace(self, die, replicate)
+
 def build_tournament(nIp, n, pvec=None, scores=(3,0,5,1), epsilon=0.05,
-                     klass=InferGroupPlayer, **kwargs):
+                     klass=InferGroupPlayer, 
+                     tournamentClass=MultiplayerTournament, **kwargs):
     if pvec is None:
         pvec = (1., 0., 1., 0.)
     l = [klass(n - 1, scores, epsilon) for i in range(nIp)]
     while len(l) < n:
         l.append(GroupPlayer(n - 1, scores, strategyKwargs=dict(pvec=pvec),
                              **kwargs))
-    return MultiplayerTournament(l, epsilon, scores)
+    return tournamentClass(l, epsilon, scores)
 
 def moran_selection(scores):
     'get index of player to replicate, player to kill'
@@ -468,6 +482,17 @@ def moran_selection(scores):
         if replicant <= r:
             break
     return i, random.randrange(len(scores))
+
+def exp_imitation(scores, beta=1.):
+    i = j = random.randrange(len(scores))
+    while i == j:
+        j = random.randrange(len(scores))
+    x1 = exp(beta * scores[i])
+    x2 = exp(beta * scores[j])
+    if random.random() <= x1 / (x1 + x2):
+        return i, j # replace j by i
+    else:
+        return j, i # replace i by j
 
 def run_tournament(nIp, n, pvec=None, selectionFunction=moran_selection,
                    selectionPeriod=1, **kwargs):
@@ -689,7 +714,8 @@ def fitness_ratio(myFrac, hisFrac, myProbs, hisProbs, scores, myBase, hisBase):
     sAB, sBA = reciprocal_scores(myProbs, hisProbs, scores)
     return (myBase + hisFrac * sAB) / (hisBase + myFrac * sBA)
 
-def moran_optimum(m, n, hisProbs, scores, epsilon=0.05, start=None):
+def moran_optimum(m, n, hisProbs, scores, epsilon=0.05, start=None, 
+                  negFunc=None):
     'find strategy that maximizes fitness ratio vs. opponent'
     if start is None:
         start = (0.5, 0.5, 0.5, 0.5)
@@ -698,14 +724,21 @@ def moran_optimum(m, n, hisProbs, scores, epsilon=0.05, start=None):
     hisFrac = float(n - m) / n
     hisBase = sBB * float(n - m - 1) / n
     myFrac = float(m + 1) / n
-    s = optimize.fmin_tnc(lambda myProbs: 
-                          -fitness_ratio(myFrac, hisFrac,
-                                         add_noise_vector(myProbs, epsilon), 
-                                         hisProbs, scores, myBase, hisBase),
-                          start, bounds=[(0,1)]*4, 
+    if negFunc is None:
+        negFunc = lambda myProbs: \
+            -fitness_ratio(myFrac, hisFrac, add_noise_vector(myProbs, epsilon), 
+                           hisProbs, scores, myBase, hisBase)
+    s = optimize.fmin_tnc(negFunc, start, bounds=[(0,1)]*4, 
                           approx_grad=True, messages=0, maxfun=1000)[0]
-    return s, fitness_ratio(myFrac, hisFrac, add_noise_vector(s, epsilon), 
-                            hisProbs, scores, myBase, hisBase)
+    return s, -negFunc(s)
+
+def diff_optimum(m, n, hisProbs, scores, **kwargs):
+    'find strategy that maximizes score difference'
+    hisFrac = float(n - m) / n
+    myFrac = float(m + 1) / n
+    negFunc = lambda myProbs: \
+        -population_score_diff(myFrac, hisFrac, myProbs, hisProbs, scores)
+    return moran_optimum(m, n, hisProbs, scores, negFunc=negFunc, **kwargs)
 
 def population_diff(myFrac, myProbs, hisProbs, scores, hisFrac=None, 
                     epsilon=0.05):
