@@ -762,17 +762,6 @@ def population_diff(myFrac, myProbs, hisProbs, scores, hisFrac=None,
     return myFrac * sAA + hisFrac * sAB \
         - hisFrac * sBB - myFrac * sBA 
 
-def zd_vector1(chi):
-    return (1. - (2. * chi - 2.) / (4. * chi + 1.), 0.,
-            (chi + 4.) / (4. * chi + 1.), 0.)
-
-def zd_vector2(chi):
-    return (1., (chi - 1.)/(3. * chi + 2.), 1., 2.*(chi - 1.)/(3. * chi + 2.))
-
-def zdr_vector(chi, phi=0.1, B=3, C=1):
-    return (1., phi * (B + chi * C), 1. - phi * (C + chi * B),
-            phi * (1. - chi) * (B - C))
-
 def add_noise(p, epsilon):
     return p * (1. - epsilon) + (1. - p) * epsilon
 
