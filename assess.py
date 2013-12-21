@@ -35,10 +35,10 @@ def analyze_log(filename, invader, start, n):
     b = stats.binom(runs, pNeutral)
     return wins, runs, b.sf(wins - 1), b.cdf(wins)
 
-def analyze_logs(pattern='*.log'):
+def analyze_logs(pattern='*.log', paramsFunc=get_log_params):
     l = []
     for logfile in glob.glob(pattern):
-        d = get_log_params(logfile)
+        d = paramsFunc(logfile)
         if d:
             wins, runs, pOver, pUnder = analyze_log(logfile, 
                                             d.get('symbol', d['invader']),
@@ -50,13 +50,14 @@ def analyze_logs(pattern='*.log'):
             l.append(d)
     return l
 
-def save_csv(results, filename='results.csv'):
+columns = ('invader', 'defender', 'start', 'n', 'wins', 'runs',
+           'pUnder', 'pOver', 'epsilon')
+
+def save_csv(results, filename='results.csv', cols=columns):
     with open(filename, 'wb') as csvfile:
         writer = csv.writer(csvfile)
         for d in results:
-            writer.writerow((d['invader'], d['defender'], d['start'],
-                             d['n'], d['wins'], d['runs'],
-                             d['pUnder'], d['pOver'], d['epsilon']))
+            writer.writerow([d[k] for k in cols])
 
 if __name__ == '__main__':
     l = analyze_logs()
