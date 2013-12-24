@@ -170,7 +170,7 @@ class InfogainStrategy(object):
             ctx = swap_moves(ctx)
             myOdds = 1. / beta_posterior(hisState[ctx], last_move[0])
             save_counts(last_move[0], self.hisState[ctx])
-        else: # no history, so use uninformative prior
+        else: # no history, so use uninformative prior of 0.5
             hisOdds = myOdds = 2.
         myOdds *= move_likelihood(self.myIpPC, last_move[0])
         hisOdds *= move_likelihood(self.hisIpPC, last_move[1])
@@ -187,6 +187,7 @@ class InfogainStrategy(object):
         return b.sf(self.mismatches - 1)
 
 class GroupMaxStrategy(InfogainStrategy):
+    _inGroupMax = True
     def start(self, myIpLOD=0., tau=0.01):
         self.pPartner = 1. / (exp(-myIpLOD) + 1.)
         self.tau = tau
@@ -214,16 +215,18 @@ class GroupMaxStrategy(InfogainStrategy):
         return myMove
 
 class MarkovStrategy(object):
-    def __init__(self, pvec=None, firstMove='C'):
+    def __init__(self, pvec=None, firstMoveP=None):
         if not pvec:
             pvec = [random.random() for i in range(4)]
         self.pdict = dict(CC=pvec[0], CD=pvec[1], DC=pvec[2], DD=pvec[3])
-        self._firstMove = firstMove
+        if firstMoveP is None: # take average of 4D probabilities
+            firstMoveP = float(sum(pvec)) / len(pvec)
+        self.firstMoveP = firstMoveP
         self.last_move = None
 
     def next_move(self, epsilon=0.05):
         if not self.last_move:
-            return self._firstMove
+            return stochastic_move(self.firstMoveP)
         return stochastic_move(self.pdict[self.last_move])
 
     def save_outcome(self, last_move):
@@ -264,6 +267,8 @@ class InferGroupPlayer(object):
         self.nround = 0
         self.scores = scores
         self.nwait = nwait
+        if epsilon == 0.: # prevent numeric underflow
+            epsilon = 1e-6
         self.epsilon = epsilon
         self.initialPval = initialPval
         self.optCycles = optCycles
@@ -285,11 +290,14 @@ class InferGroupPlayer(object):
             optFunc = moran_optimum
         myOdds = numpy.zeros(self.nplayer)
         hisOdds = numpy.zeros(self.nplayer)
+        doGroupMax = False
         for i,last_move in enumerate(outcomes):
             self.players[i].nround += 1
-            if self.players[i].nround == self.nwait: # use groupmax strategy
-                self.players[i].__class__ = GroupMaxStrategy
-                self.players[i].start(self.myIpLOD[i])
+            if self.do_groupmax(i):
+                doGroupMax = True
+                if not getattr(self.players[i], '_inGroupMax', False):
+                    self.players[i].__class__ = GroupMaxStrategy
+                    self.players[i].start(self.myIpLOD[i])
             if hasattr(self, 'groupState'):
                 if self.players[i].nround > self.nwait:
                     t = self.players[i].save_outcome(last_move, self.epsilon,
@@ -304,34 +312,44 @@ class InferGroupPlayer(object):
         self.hisIpLOD += numpy.log(hisOdds)
         self.myIpLOD += numpy.log(myOdds)
         self.nround += 1
-        if self.nround < self.nwait:
+        if not doGroupMax:
             return
         post = 1. / (numpy.exp(self.hisIpLOD) + 1.)
         nIp = (post < self.initialPval).sum() # count confident inf-players
         p = (post.sum() + 1.) / (self.nplayer + 3.) # posterior estimate
         self.priorIpLOD = log((1. - p) / p) # prior odds ratio
-        if self.nround == self.nwait: # get group players by p-value
-            post2 = numpy.zeros(self.nplayer)
-            for i,p in enumerate(self.players):
-                if p.match_pval(self.epsilon) < self.initialPval:
-                    post2[i] = 1.
-            if post2.sum() >= 1.: # found convincing group member(s)
-                post = post2
-        l = []
-        for i,p in enumerate(self.players):
-            d = p.state # swap moves to his POV!
-            v = numpy.array(d['CC'] + d['DC'] + d['CD'] + d['DD']) * post[i]
-            l.append(v)
-        counts = numpy.array(l).sum(axis=0) + self.oldcounts
-        self.groupState = dict(CC=counts[:2], DC=counts[2:4], 
-                               CD=counts[4:6], DD=counts[6:]) # swap back!
+        post = self.get_group_weights(post)
+        groupStrategy, self.groupState = self.get_group_strategy(post)
         if abs(self.nIpCurrent - nIp) >= self.nrecalc or \
                 self.nround % self.optCycles == 0: # update optimal strategy 
             self.nIpCurrent = nIp # save new count
-            groupStrategy = (counts[::2] + 1.) / (counts[1::2] + 2.)
             s, r = optFunc(nIp, self.nplayer, groupStrategy, 
                            self.scores, epsilon=self.epsilon)
             self.optimalStrategy = dict(CC=s[0], CD=s[1], DC=s[2], DD=s[3])
+    def do_groupmax(self, i):
+        return self.players[i].nround >= self.nwait
+    def get_group_weights(self, post, filterFunc=None):
+        if filterFunc is None and self.nround == self.nwait: # get group players by p-value
+            filterFunc = lambda x:numpy.array(
+                [(p.match_pval(self.epsilon) < self.initialPval) 
+                 for p in self.players])
+        if filterFunc: # apply filter function
+            post2 = numpy.zeros(self.nplayer)
+            post2[filterFunc(post)] = 1.
+            if post2.sum() >= 1.: # found convincing group member(s)
+                return post2
+        return post
+    def get_group_strategy(self, pGroup):
+        l = []
+        for i,p in enumerate(self.players):
+            d = p.state # swap moves to his POV!
+            v = numpy.array(d['CC'] + d['DC'] + d['CD'] + d['DD']) * pGroup[i]
+            l.append(v)
+        counts = numpy.array(l).sum(axis=0) + self.oldcounts
+        groupStrategy = (counts[::2] + 1.) / (counts[1::2] + 2.)
+        groupState = dict(CC=counts[:2], DC=counts[2:4], 
+                          CD=counts[4:6], DD=counts[6:]) # swap back!
+        return groupStrategy, groupState
     def replicate(self):
         return self.__class__(self.nplayer, self.scores, self.epsilon, 
                               self.nwait, self.initialPval, name=self.name)
@@ -347,11 +365,34 @@ class InferGroupPlayer(object):
         self.myIpLOD[i] = 0.
     def is_inference_player(self):
         return True
+    def check_accuracy(self, names):
+        matched = [(name == self.name) for name in names]
+        groupmax = [isinstance(p, GroupMaxStrategy) for p in self.players]
+        prediction = (self.hisIpLOD > 0.)
+        d = {}
+        for i,p in enumerate(prediction):
+            if matched[i] != p:
+                d[p] = d.get(p, 0) + 1
+                d[groupmax[i], p] = d.get((groupmax[i], p), 0) + 1
+        return d
         
 class InferGroupPlayer2(InferGroupPlayer):
     'maximizes difference in scores rather than ratio'
     def save_outcome(self, outcomes):
         return InferGroupPlayer.save_outcome(self, outcomes, diff_optimum)
+
+class InferGroupPlayerZeroNoise(InferGroupPlayer2):
+    'for use with epsilon=0'
+    def do_groupmax(self, i):
+        'perform groupmax as soon as non-inf players detected'
+        return self.players[i].mismatches > 0
+    def report_mismatches(self, post):
+        'report non-inf players'
+        return numpy.array([(p.mismatches > 0) for p in self.players])
+    def get_group_weights(self, post):
+        return InferGroupPlayer2.get_group_weights(self, post, 
+                                                   self.report_mismatches)
+
 
 class InferencePlayer2(object):
     def __init__(self):
@@ -442,6 +483,23 @@ class MultiplayerTournament(object):
                 n += 1
         if n > 0 and n < len(scores):
             return n, (s / n) / ((sum(scores) - s) / (len(scores) - n))
+
+    def get_player_names(self):
+        return [p.name for p in self.players]
+
+    def check_accuracy(self):
+        names = self.get_player_names()
+        n = 0
+        d = {}
+        for i, name in enumerate(names):
+            if name == 'I': 
+                for k,v in self.players[i].check_accuracy(names[:i] + names[i + 1:]).items():
+                    d[k] = d.get(k, 0) + v
+                n += len(self.players) - 1
+        for k, v in d.items():
+            d[k] = float(v) / n
+        return d
+
     def count_players(self):
         d = {}
         for p in self.players:
@@ -508,7 +566,6 @@ def run_tournament(nIp, n, pvec=None, selectionFunction=moran_selection,
         replicate, die = selectionFunction(scores)
         if replicate != die:
             tour.replace(die, replicate)
-        #print tour.report(scores)
         fixed = tour.fixation_status()
     return fixed, tour.nround
 
@@ -524,6 +581,24 @@ def save_tournaments(nIp, nplayer, nmax=100, filename='out.log',
                 n = len(list(ifile))
         else: # just perform nmax runs
             n += 1
+
+def check_accuracy(nIp, n, pvec=None, ncycle=100, klass=InferGroupPlayer2,
+                   epsilon=0.05):
+    if epsilon == 0.:
+        klass = InferGroupPlayerZeroNoise
+    tour = build_tournament(nIp, n, pvec, klass=klass, epsilon=epsilon,
+                            tournamentClass=MultiplayerTournament2,
+                            scores=(2, -1, 3, 0))
+    l = []
+    for i in range(ncycle):
+        scores = tour.do_round()
+        l.append(tour.check_accuracy())
+        replicate, die = exp_imitation(scores)
+        if replicate != die:
+            tour.replace(die, replicate)
+        if tour.fixation_status():
+            break
+    return l
 
 class Runner(object):
     def __init__(self, *args):
@@ -600,57 +675,65 @@ def exact_stationary(p,q):
         s.append(d)
     # normalize
     n = sum(s)
+    if n <= 0.:
+        raise ValueError('exact_stationary() cannot handle zeros')
     s = numpy.array(s) / n
     return s
 
-#def stationary_dist(t, epsilon=1e-10):
-    #'compute stationary dist from transition matrix'
-    #diff = 1.
-    #while diff > epsilon:
-        #t = linalg.matrix_power(t, 2)
-        #w = t.sum(axis=1) # get row sums
-        #t /= w.reshape((len(w), 1)) # normalize each row
-        #m = numpy.mean(t, axis=0)
-        #diff = numpy.dot(m, t) - m
-        #diff = (diff * diff).sum()
-    #return m
+def stationary_dist(t, epsilon=1e-10):
+    'compute stationary dist from transition matrix'
+    diff = 1.
+    while diff > epsilon:
+        t = linalg.matrix_power(t, 2)
+        w = t.sum(axis=1) # get row sums
+        t /= w.reshape((len(w), 1)) # normalize each row
+        m = numpy.mean(t, axis=0)
+        diff = numpy.dot(m, t) - m
+        diff = (diff * diff).sum()
+    return m
 
-#def stationary_dist2(t, epsilon=.001):
-    #'compute stationary distribution using eigenvector method'
-    #w, v = linalg.eig(t.transpose())
-    #for i,eigenval in enumerate(w):
-        #s = numpy.real_if_close(v[:,i]) # handle small complex number errors
-        #s /= s.sum() # normalize
-        #if abs(eigenval - 1.) <= epsilon and (s >= 0.).sum() == len(s):
-            #return s # must have unit eigenvalue and all non-neg components
-    #raise ValueError('no stationary eigenvalue??')
+def stationary_dist2(t, epsilon=.001):
+    'compute stationary distribution using eigenvector method'
+    w, v = linalg.eig(t.transpose())
+    for i,eigenval in enumerate(w):
+        s = numpy.real_if_close(v[:,i]) # handle small complex number errors
+        s /= s.sum() # normalize
+        if abs(eigenval - 1.) <= epsilon and (s >= 0.).sum() == len(s):
+            return s # must have unit eigenvalue and all non-neg components
+    raise ValueError('no stationary eigenvalue??')
 
-#def game_transition_matrix(myProbs, hisProbs0):
-    #'compute transition rate matrix for a strategy pair'
+def game_transition_matrix(myProbs, hisProbs0):
+    'compute transition rate matrix for a strategy pair'
     # have to swap moves for other player...
-    #hisProbs = (hisProbs0[0], hisProbs0[2],hisProbs0[1], hisProbs0[3])
-    #l = []
-    #for i,myP in enumerate(myProbs):
-        #hisP = hisProbs[i]
-        #l.append((myP * hisP, myP * (1. - hisP), 
-                  #(1. - myP) * hisP, (1. - myP) * (1. - hisP)))
-    #return numpy.array(l)
+    hisProbs = (hisProbs0[0], hisProbs0[2],hisProbs0[1], hisProbs0[3])
+    l = []
+    for i,myP in enumerate(myProbs):
+        hisP = hisProbs[i]
+        l.append((myP * hisP, myP * (1. - hisP), 
+                  (1. - myP) * hisP, (1. - myP) * (1. - hisP)))
+    return numpy.array(l)
 
-#def stationary_rates(myProbs, hisProbs):
-    #'compute expectation rates of all possible transitions for strategy pair'
-    #t = game_transition_matrix(myProbs, hisProbs)
-    #s = stationary_dist2(t)
-    #return [p * t[i] for (i,p) in enumerate(s)]
+def stationary_rates(myProbs, hisProbs, useEigen=True):
+    'compute expectation rates of all possible transitions for strategy pair'
+    t = game_transition_matrix(myProbs, hisProbs)
+    if useEigen:
+        s = stationary_dist2(t)
+    else:
+        s = stationary_dist(t)
+    return [p * t[i] for (i,p) in enumerate(s)]
 
-#def stationary_score(myProbs, hisProbs, scores):
-    #'compute expectation score for my strategy vs. opponent strategy'
-    #rates = stationary_rates(myProbs, hisProbs)
-    #l = [scores * vec for vec in rates]
-    #return numpy.array(l).sum()
+def stationary_score2(myProbs, hisProbs, scores, useEigen=True):
+    'compute expectation score for my strategy vs. opponent strategy'
+    rates = stationary_rates(myProbs, hisProbs, useEigen)
+    l = [scores * vec for vec in rates]
+    return numpy.array(l).sum()
 
 def stationary_score(myProbs, hisProbs, scores):
     'compute expectation score for my strategy vs. opponent strategy'
-    s = exact_stationary(myProbs, hisProbs)
+    try:
+        s = exact_stationary(myProbs, hisProbs)
+    except ValueError:
+        return stationary_score2(myProbs, hisProbs, scores, useEigen=False)
     return numpy.dot(s, numpy.array(scores))
 
 def generate_corners(epsilon=0.01):
