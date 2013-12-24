@@ -19,9 +19,15 @@ sys.path.append(os.getcwd())
 import info
 from players import *
 
+epsilon=%(epsilon)s
+if epsilon == 0.:
+    klass = info.InferGroupPlayerZeroNoise
+else:
+    klass=info.InferGroupPlayer2
+
 info.save_tournaments(%(nIp)s, %(n)s, %(nrun)s - %(ncpu)s + 1, 
-                      "%(runName)s.log", epsilon=%(epsilon)s, 
-                      klass=info.InferGroupPlayer2, pvec=%(player)s,
+                      "%(runName)s.log", epsilon=epsilon, 
+                      klass=klass, pvec=%(player)s,
                       name="%(player)s", selectionFunction=info.exp_imitation,
                       tournamentClass=info.MultiplayerTournament2,
                       scores=(2, -1, 3, 0))
