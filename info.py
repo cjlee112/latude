@@ -193,13 +193,16 @@ class GroupMaxStrategy(InfogainStrategy):
         self.tau = tau
         self.last_move2 = self.last_move # keep history for 2 moves...
     def next_move(self, epsilon=0.05, hisP=0, myP=0, optimalStrategy=None):
-        if hisP > 0.5: # cooperate with any inference player
+        if hisP >= 0.5: # cooperate with any inference player
             myMove = 'C'
             self.myIpPC = 1. - epsilon
         else: # apply optimal strategy vs. group
             self.myIpPC = add_noise(optimalStrategy[self.last_move], epsilon)
             myMove = stochastic_move(optimalStrategy[self.last_move])
-        # 2-state HMM for whether inf-player is partnering with us or not
+        self.update_hmm(epsilon, optimalStrategy)
+        return myMove
+    def update_hmm(self, epsilon, optimalStrategy):
+        '2-state HMM for whether inf-player is partnering with us or not'
         p1 = ((1. - self.tau) * self.pPartner 
               + self.tau * (1. - self.pPartner)) \
             * move_likelihood(1. - epsilon, self.last_move[1]) # partner
@@ -212,7 +215,6 @@ class GroupMaxStrategy(InfogainStrategy):
         pC = p + (1. - p) * optimalStrategy[swap_moves(self.last_move)]
         self.hisIpPC = add_noise(pC, epsilon) # p(inf-player cooperates w/ me)
         self.last_move2 = self.last_move
-        return myMove
 
 class MarkovStrategy(object):
     def __init__(self, pvec=None, firstMoveP=None):
@@ -255,13 +257,14 @@ class GroupPlayer(object):
         return False
 
 class InferGroupPlayer(object):
+    _initialStrategy = InfogainStrategy
     def __init__(self, nplayer, scores, epsilon=0.05, nwait=10, 
                  initialPval=0.01, optCycles=100, nrecalc=10, name='I'):
         self.nplayer = nplayer
         self.priorIpLOD = 0.
         self.myIpLOD = numpy.zeros(nplayer)
         self.hisIpLOD = numpy.zeros(nplayer)
-        self.players = [InfogainStrategy() for i in range(nplayer)]
+        self.players = [self._initialStrategy() for i in range(nplayer)]
         for player in self.players:
             player.nround = 0
         self.nround = 0
@@ -320,6 +323,8 @@ class InferGroupPlayer(object):
         self.priorIpLOD = log((1. - p) / p) # prior odds ratio
         post = self.get_group_weights(post)
         groupStrategy, self.groupState = self.get_group_strategy(post)
+        self.update_strategy(nIp, groupStrategy, optFunc)
+    def update_strategy(self, nIp, groupStrategy, optFunc):
         if abs(self.nIpCurrent - nIp) >= self.nrecalc or \
                 self.nround % self.optCycles == 0: # update optimal strategy 
             self.nIpCurrent = nIp # save new count
@@ -359,7 +364,7 @@ class InferGroupPlayer(object):
             d = self.players[i].state # swap moves to his POV!
             v = numpy.array(d['CC'] + d['DC'] + d['CD'] + d['DD'])
             self.oldcounts += v # save his counts
-        self.players[i] = InfogainStrategy()
+        self.players[i] = self._initialStrategy()
         self.players[i].nround = 0
         self.hisIpLOD[i] = self.priorIpLOD # reset posterior odds ratios
         self.myIpLOD[i] = 0.
@@ -393,6 +398,31 @@ class InferGroupPlayerZeroNoise(InferGroupPlayer2):
         return InferGroupPlayer2.get_group_weights(self, post, 
                                                    self.report_mismatches)
 
+class TagStrategy(GroupMaxStrategy):
+    hisIpPC = myIpPC = 0.5
+    def update_hmm(self, epsilon, optimalStrategy):
+        pass
+
+class InferGroupPlayerTags(InferGroupPlayer):
+    'positive control: use true identities to get optimal strategy'
+    _initialStrategy = TagStrategy
+    def save_outcome(self, outcomes, tags=None):
+        self.nround += 1
+        for i,last_move in enumerate(outcomes):
+            self.players[i].save_outcome(last_move, self.epsilon)
+        post = numpy.zeros(self.nplayer)
+        nIp = 0
+        for i,name in enumerate(tags):
+            if name != self.name:
+                post[i] = 1.
+                self.hisIpLOD[i] = -999.
+            else:
+                self.hisIpLOD[i] = 999.
+                nIp += 1
+        groupStrategy, self.groupState = self.get_group_strategy(post)
+        self.update_strategy(nIp, groupStrategy, diff_optimum)
+        
+    
 
 class InferencePlayer2(object):
     def __init__(self):
@@ -451,6 +481,8 @@ class MultiplayerTournament(object):
         self.scoresDict = dict(CC=scores[0], CD=scores[1], DC=scores[2],
                                DD=scores[3])
         self.nround = 0
+    def save_outcome(self, i, outcomes):
+        return self.players[i].save_outcome(outcomes)
     def do_round(self):
         'run one round of the tournament, and return total score of each player'
         moves = []
@@ -458,11 +490,11 @@ class MultiplayerTournament(object):
             moves.append([move_with_error(m, self.epsilon)
                           for m in player.next_move()])
         scores = []
-        for i,player in enumerate(self.players):
+        for i in range(self.nplayer):
             oppMoves = [moves[j][i - 1] for j in range(i)] \
                 + [moves[j][i] for j in range(i + 1, self.nplayer)]
             outcomes = [(t[0] + t[1]) for t in zip(moves[i], oppMoves)]
-            player.save_outcome(outcomes)
+            self.save_outcome(i, outcomes)
             scores.append(sum([self.scoresDict[g] for g in outcomes])
                           / float(len(outcomes))) # player's average score
         self.nround += 1
@@ -519,6 +551,14 @@ class MultiplayerTournament2(MultiplayerTournament):
         if self.players[die].name == self.players[replicate].name:
             return # if same type, do nothing
         return MultiplayerTournament.replace(self, die, replicate)
+
+class MultiplayerTournamentTags(MultiplayerTournament2):
+    def save_outcome(self, i, outcomes):
+        tags = [p.name for (j,p) in enumerate(self.players) if j != i]
+        try: # pass tags if player will use them
+            return self.players[i].save_outcome(outcomes, tags=tags)
+        except TypeError: # default: player does not accept tags
+            return self.players[i].save_outcome(outcomes)
 
 def build_tournament(nIp, n, pvec=None, scores=(3,0,5,1), epsilon=0.05,
                      klass=InferGroupPlayer, 
