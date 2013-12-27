@@ -23,7 +23,6 @@ def beta_gain(n, N, nsample=1000):
     l = [omega_gain(omega, n, N) for omega in rv.rvs(nsample)]
     return sum(l) / float(nsample)
 
-    
 def initial_state():
     return dict(CC=[0,0], CD=[0,0], DC=[0,0], DD=[0,0])
 
@@ -45,8 +44,9 @@ def calc_info_gains(last_move, state):
     return l
 
 def calc_best_long_term_response(q, scores=[3,0,5,1]):
-    f = functools.partial(stationary_score, scores=scores, hisProbs=q)
-    p, _, _ = optimize.fmin_tnc(lambda p: -1* f(p), [0.5,0.5,0.5,0.5], bounds=[(0,1)]*4, approx_grad=True, messages=0, maxfun=1000)
+    p, _, _ = optimize.fmin_tnc(lambda p: -stationary_scores(p, q, scores)[0], 
+                                [0.5,0.5,0.5,0.5], bounds=[(0,1)]*4, 
+                                approx_grad=True, messages=0, maxfun=1000)
     print q,p
     return p
 
@@ -322,15 +322,27 @@ class InferGroupPlayer(object):
         p = (post.sum() + 1.) / (self.nplayer + 3.) # posterior estimate
         self.priorIpLOD = log((1. - p) / p) # prior odds ratio
         post = self.get_group_weights(post)
-        groupStrategy, self.groupState = self.get_group_strategy(post)
-        self.update_strategy(nIp, groupStrategy, optFunc)
-    def update_strategy(self, nIp, groupStrategy, optFunc):
-        if abs(self.nIpCurrent - nIp) >= self.nrecalc or \
-                self.nround % self.optCycles == 0: # update optimal strategy 
-            self.nIpCurrent = nIp # save new count
-            s, r = optFunc(nIp, self.nplayer, groupStrategy, 
-                           self.scores, epsilon=self.epsilon)
+        counts = self.get_group_counts(post)
+        self.groupState = dict(CC=counts[:2], DC=counts[2:4], 
+                               CD=counts[4:6], DD=counts[6:]) # swap to my POV
+        self.update_strategy(nIp, counts, optFunc)
+    def update_strategy(self, nIp, counts, optFunc=None, countsMin=1000):
+        if not hasattr(self, 'optimalStrategy') or \
+                counts[1::2].sum() < countsMin or \
+                (nIp >= getattr(self, 'switchLower', 0) and
+                 nIp <= getattr(self, 'switchUpper', self.nplayer)):
+            s, self.switchLower, self.switchUpper = \
+                choose_allc_vs_alld(counts, nIp, self.nplayer, self.scores)
             self.optimalStrategy = dict(CC=s[0], CD=s[1], DC=s[2], DD=s[3])
+            #print '%1.0f, %1.0f, %1.0f, %1.0f' % (counts[1::2].sum(), 
+            #   self.optimalStrategy['CC'], self.switchLower, self.switchUpper)
+        #if abs(self.nIpCurrent - nIp) >= self.nrecalc or \
+        #        self.nround % self.optCycles == 0: # update optimal strategy 
+        #    self.nIpCurrent = nIp # save new count
+        #    s, r = optFunc(nIp, self.nplayer, groupStrategy, 
+        #                   self.scores, epsilon=self.epsilon)
+        #    self.optimalStrategy = dict(CC=s[0], CD=s[1], DC=s[2], DD=s[3])
+        #    return True
     def do_groupmax(self, i):
         return self.players[i].nround >= self.nwait
     def get_group_weights(self, post, filterFunc=None):
@@ -344,17 +356,14 @@ class InferGroupPlayer(object):
             if post2.sum() >= 1.: # found convincing group member(s)
                 return post2
         return post
-    def get_group_strategy(self, pGroup):
+    def get_group_counts(self, pGroup):
         l = []
         for i,p in enumerate(self.players):
             d = p.state # swap moves to his POV!
             v = numpy.array(d['CC'] + d['DC'] + d['CD'] + d['DD']) * pGroup[i]
             l.append(v)
         counts = numpy.array(l).sum(axis=0) + self.oldcounts
-        groupStrategy = (counts[::2] + 1.) / (counts[1::2] + 2.)
-        groupState = dict(CC=counts[:2], DC=counts[2:4], 
-                          CD=counts[4:6], DD=counts[6:]) # swap back!
-        return groupStrategy, groupState
+        return counts
     def replicate(self):
         return self.__class__(self.nplayer, self.scores, self.epsilon, 
                               self.nwait, self.initialPval, name=self.name)
@@ -419,8 +428,13 @@ class InferGroupPlayerTags(InferGroupPlayer):
             else:
                 self.hisIpLOD[i] = 999.
                 nIp += 1
-        groupStrategy, self.groupState = self.get_group_strategy(post)
-        self.update_strategy(nIp, groupStrategy, diff_optimum)
+        counts = self.get_group_counts(post)
+        self.groupState = dict(CC=counts[:2], DC=counts[2:4], 
+                               CD=counts[4:6], DD=counts[6:]) # swap to my POV
+        if self.nround > 1:
+            self.update_strategy(nIp, counts)
+        else:
+            self.optimalStrategy = dict(CC=1., CD=1., DC=1., DD=1.)
         
     
 
@@ -623,12 +637,12 @@ def save_tournaments(nIp, nplayer, nmax=100, filename='out.log',
             n += 1
 
 def check_accuracy(nIp, n, pvec=None, ncycle=100, klass=InferGroupPlayer2,
-                   epsilon=0.05):
+                   epsilon=0.05, tournamentClass=MultiplayerTournament2,
+                   scores=(2, -1, 3, 0)):
     if epsilon == 0.:
         klass = InferGroupPlayerZeroNoise
     tour = build_tournament(nIp, n, pvec, klass=klass, epsilon=epsilon,
-                            tournamentClass=MultiplayerTournament2,
-                            scores=(2, -1, 3, 0))
+                            tournamentClass=tournamentClass, scores=scores)
     l = []
     for i in range(ncycle):
         scores = tour.do_round()
@@ -715,13 +729,14 @@ def exact_stationary(p,q):
         s.append(d)
     # normalize
     n = sum(s)
-    if n <= 0.:
+    if n == 0.:
         raise ValueError('exact_stationary() cannot handle zeros')
     s = numpy.array(s) / n
     return s
 
-def stationary_dist(t, epsilon=1e-10):
+def stationary_dist(myProbs, hisProbs, epsilon=1e-10):
     'compute stationary dist from transition matrix'
+    t = game_transition_matrix(myProbs, hisProbs)
     diff = 1.
     while diff > epsilon:
         t = linalg.matrix_power(t, 2)
@@ -732,8 +747,9 @@ def stationary_dist(t, epsilon=1e-10):
         diff = (diff * diff).sum()
     return m
 
-def stationary_dist2(t, epsilon=.001):
+def stationary_dist2(myProbs, hisProbs, epsilon=.001):
     'compute stationary distribution using eigenvector method'
+    t = game_transition_matrix(myProbs, hisProbs)
     w, v = linalg.eig(t.transpose())
     for i,eigenval in enumerate(w):
         s = numpy.real_if_close(v[:,i]) # handle small complex number errors
@@ -753,28 +769,14 @@ def game_transition_matrix(myProbs, hisProbs0):
                   (1. - myP) * hisP, (1. - myP) * (1. - hisP)))
     return numpy.array(l)
 
-def stationary_rates(myProbs, hisProbs, useEigen=True):
-    'compute expectation rates of all possible transitions for strategy pair'
-    t = game_transition_matrix(myProbs, hisProbs)
-    if useEigen:
-        s = stationary_dist2(t)
-    else:
-        s = stationary_dist(t)
-    return [p * t[i] for (i,p) in enumerate(s)]
-
-def stationary_score2(myProbs, hisProbs, scores, useEigen=True):
-    'compute expectation score for my strategy vs. opponent strategy'
-    rates = stationary_rates(myProbs, hisProbs, useEigen)
-    l = [scores * vec for vec in rates]
-    return numpy.array(l).sum()
-
-def stationary_score(myProbs, hisProbs, scores):
+def stationary_scores(myProbs, hisProbs, scores):
     'compute expectation score for my strategy vs. opponent strategy'
     try:
         s = exact_stationary(myProbs, hisProbs)
     except ValueError:
-        return stationary_score2(myProbs, hisProbs, scores, useEigen=False)
-    return numpy.dot(s, numpy.array(scores))
+        s = stationary_dist(myProbs, hisProbs)
+    return ((scores * s).sum(), 
+            ((scores[0], scores[2], scores[1], scores[3]) * s).sum())
 
 def generate_corners(epsilon=0.01):
     'generate all corners of 4D unit hypercube, with error rate epsilon'
@@ -792,7 +794,7 @@ def optimal_corner(hisProbs, scores, **kwargs):
     'find best strategy in response to a given 4D strategy'
     l = []
     for myProbs in generate_corners(**kwargs):
-        l.append((stationary_score(myProbs, hisProbs, scores), myProbs))
+        l.append((stationary_scores(myProbs, hisProbs, scores)[0], myProbs))
     l.sort()
     return l
 
@@ -800,7 +802,7 @@ def all_vs_all(scores, **kwargs):
     'rank all possible strategies by their minimum score vs. all strategies'
     l = []
     for myProbs in generate_corners(**kwargs):
-        l.append((min([(stationary_score(myProbs, hisProbs, scores), hisProbs)
+        l.append((min([(stationary_scores(myProbs, hisProbs, scores)[0], hisProbs)
                        for hisProbs in generate_corners(**kwargs)]), myProbs))
     l.sort()
     return l
@@ -809,25 +811,19 @@ def population_optimum(myFrac, hisFrac, hisProbs, scores, epsilon=0.05):
     'find optimal corner strategy at the specified population fraction'
     l = []
     for myProbs in generate_corners(epsilon):
-        sAB = stationary_score(myProbs, hisProbs, scores)
-        sBA = stationary_score(hisProbs, myProbs, scores)
+        sAB, sBA = stationary_scores(myProbs, hisProbs, scores)
         l.append((hisFrac * sAB - myFrac * sBA, myProbs))
     l.sort()
     return l[-1]
 
-def reciprocal_scores(myProbs, hisProbs, scores):
-    sAB = stationary_score(myProbs, hisProbs, scores)
-    sBA = stationary_score(hisProbs, myProbs, scores)
-    return sAB, sBA
-
 def self_scores(hisProbs, scores, epsilon=0.05):
     allC = (1. - epsilon,1. - epsilon,1. - epsilon,1. - epsilon,)
-    sAA = stationary_score(allC, allC, scores)
-    sBB = stationary_score(hisProbs, hisProbs, scores)
+    sAA = stationary_scores(allC, allC, scores)[0]
+    sBB = stationary_scores(hisProbs, hisProbs, scores)[0]
     return sAA, sBB
 
 def population_score_diff(myFrac, hisFrac, myProbs, hisProbs, scores):
-    sAB, sBA = reciprocal_scores(myProbs, hisProbs, scores)
+    sAB, sBA = stationary_scores(myProbs, hisProbs, scores)
     return hisFrac * sAB - myFrac * sBA
 
 def population_optimum2(myFrac, hisFrac, hisProbs, scores, epsilon=0.05):
@@ -839,7 +835,7 @@ def population_optimum2(myFrac, hisFrac, hisProbs, scores, epsilon=0.05):
                               hisProbs, scores, hisFrac, epsilon)
 
 def fitness_ratio(myFrac, hisFrac, myProbs, hisProbs, scores, myBase, hisBase):
-    sAB, sBA = reciprocal_scores(myProbs, hisProbs, scores)
+    sAB, sBA = stationary_scores(myProbs, hisProbs, scores)
     return (myBase + hisFrac * sAB) / (hisBase + myFrac * sBA)
 
 def moran_optimum(m, n, hisProbs, scores, epsilon=0.05, start=None, 
@@ -879,11 +875,47 @@ def population_diff(myFrac, myProbs, hisProbs, scores, hisFrac=None,
     e_ = 1. - epsilon
     sAA = e_ * e_ * scores[0] + e_ * epsilon * (scores[1] + scores[2]) \
         + epsilon * epsilon * scores[3]
-    sBB = stationary_score(hisProbs, hisProbs, scores)
-    sAB = stationary_score(myProbs, hisProbs, scores)
-    sBA = stationary_score(hisProbs, myProbs, scores)
+    sBB = stationary_scores(hisProbs, hisProbs, scores)[0]
+    sAB, sBA = stationary_scores(myProbs, hisProbs, scores)
     return myFrac * sAA + hisFrac * sAB \
         - hisFrac * sBB - myFrac * sBA 
+
+def sample_posterior_strategies(counts, nsample=100):
+    'return sample of strategy vectors drawn from posterior distribution'
+    l = []
+    for i in range(0, 8, 2):
+        rv = stats.beta(counts[i] + 1, counts[i + 1] - counts[i] + 1)
+        l.append(rv.rvs(nsample))
+    return zip(*l)
+    
+def get_sample_scores(myProbs, pvecSample, scores):
+    return [stationary_scores(myProbs, pvec, scores) for pvec in pvecSample]
+
+def get_line_params(scoreSample, n):
+    return [(t[0] + t[1], n * t[0] - t[1]) for t in scoreSample]
+
+def get_intersections(lineSample1, lineSample2):
+    l = []
+    for i,t in enumerate(lineSample1):
+        l.append((t[1] - lineSample2[i][1]) / (t[0] - lineSample2[i][0]))
+    l.sort()
+    return l
+
+def choose_allc_vs_alld(counts, m, n, scores, p=0.05, nsample=100):
+    allc = (1., 1., 1., 1.)
+    alld = (0., 0., 0., 0.)
+    pvecSample = sample_posterior_strategies(counts, nsample)
+    scoreSampleC = get_sample_scores(allc, pvecSample, scores)
+    scoreSampleD = get_sample_scores(alld, pvecSample, scores)
+    lineSampleC = get_line_params(scoreSampleC, n)
+    lineSampleD = get_line_params(scoreSampleD, n)
+    mSample = get_intersections(lineSampleC, lineSampleD)
+    if m < mSample[len(mSample) / 2]:
+        best = allc
+    else:
+        best = alld
+    i = int(p * len(mSample))
+    return best, mSample[i], mSample[-i - 1]
 
 def add_noise(p, epsilon):
     return p * (1. - epsilon) + (1. - p) * epsilon
