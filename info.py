@@ -45,8 +45,9 @@ def calc_info_gains(last_move, state):
     return l
 
 def calc_best_long_term_response(q, scores=[3,0,5,1]):
-    f = functools.partial(stationary_score, scores=scores, hisProbs=q)
-    p, _, _ = optimize.fmin_tnc(lambda p: -1* f(p), [0.5,0.5,0.5,0.5], bounds=[(0,1)]*4, approx_grad=True, messages=0, maxfun=1000)
+    p, _, _ = optimize.fmin_tnc(lambda p: -stationary_scores(p, q, scores)[0], 
+                                [0.5,0.5,0.5,0.5], bounds=[(0,1)]*4, 
+                                approx_grad=True, messages=0, maxfun=1000)
     print q,p
     return p
 
@@ -331,6 +332,7 @@ class InferGroupPlayer(object):
             s, r = optFunc(nIp, self.nplayer, groupStrategy, 
                            self.scores, epsilon=self.epsilon)
             self.optimalStrategy = dict(CC=s[0], CD=s[1], DC=s[2], DD=s[3])
+            return True
     def do_groupmax(self, i):
         return self.players[i].nround >= self.nwait
     def get_group_weights(self, post, filterFunc=None):
@@ -420,7 +422,11 @@ class InferGroupPlayerTags(InferGroupPlayer):
                 self.hisIpLOD[i] = 999.
                 nIp += 1
         groupStrategy, self.groupState = self.get_group_strategy(post)
-        self.update_strategy(nIp, groupStrategy, diff_optimum)
+        if self.nround > 1:
+            print 'groupState:', self.groupState
+            self.update_strategy(nIp, groupStrategy, diff_optimum)
+        else:
+            self.optimalStrategy = dict(CC=1., CD=1., DC=1., DD=1.)
         
     
 
@@ -623,12 +629,12 @@ def save_tournaments(nIp, nplayer, nmax=100, filename='out.log',
             n += 1
 
 def check_accuracy(nIp, n, pvec=None, ncycle=100, klass=InferGroupPlayer2,
-                   epsilon=0.05):
+                   epsilon=0.05, tournamentClass=MultiplayerTournament2,
+                   scores=(2, -1, 3, 0)):
     if epsilon == 0.:
         klass = InferGroupPlayerZeroNoise
     tour = build_tournament(nIp, n, pvec, klass=klass, epsilon=epsilon,
-                            tournamentClass=MultiplayerTournament2,
-                            scores=(2, -1, 3, 0))
+                            tournamentClass=tournamentClass, scores=scores)
     l = []
     for i in range(ncycle):
         scores = tour.do_round()
@@ -715,13 +721,14 @@ def exact_stationary(p,q):
         s.append(d)
     # normalize
     n = sum(s)
-    if n <= 0.:
+    if n == 0.:
         raise ValueError('exact_stationary() cannot handle zeros')
     s = numpy.array(s) / n
     return s
 
-def stationary_dist(t, epsilon=1e-10):
+def stationary_dist(myProbs, hisProbs, epsilon=1e-10):
     'compute stationary dist from transition matrix'
+    t = game_transition_matrix(myProbs, hisProbs)
     diff = 1.
     while diff > epsilon:
         t = linalg.matrix_power(t, 2)
@@ -732,8 +739,9 @@ def stationary_dist(t, epsilon=1e-10):
         diff = (diff * diff).sum()
     return m
 
-def stationary_dist2(t, epsilon=.001):
+def stationary_dist2(myProbs, hisProbs, epsilon=.001):
     'compute stationary distribution using eigenvector method'
+    t = game_transition_matrix(myProbs, hisProbs)
     w, v = linalg.eig(t.transpose())
     for i,eigenval in enumerate(w):
         s = numpy.real_if_close(v[:,i]) # handle small complex number errors
@@ -753,28 +761,14 @@ def game_transition_matrix(myProbs, hisProbs0):
                   (1. - myP) * hisP, (1. - myP) * (1. - hisP)))
     return numpy.array(l)
 
-def stationary_rates(myProbs, hisProbs, useEigen=True):
-    'compute expectation rates of all possible transitions for strategy pair'
-    t = game_transition_matrix(myProbs, hisProbs)
-    if useEigen:
-        s = stationary_dist2(t)
-    else:
-        s = stationary_dist(t)
-    return [p * t[i] for (i,p) in enumerate(s)]
-
-def stationary_score2(myProbs, hisProbs, scores, useEigen=True):
-    'compute expectation score for my strategy vs. opponent strategy'
-    rates = stationary_rates(myProbs, hisProbs, useEigen)
-    l = [scores * vec for vec in rates]
-    return numpy.array(l).sum()
-
-def stationary_score(myProbs, hisProbs, scores):
+def stationary_scores(myProbs, hisProbs, scores):
     'compute expectation score for my strategy vs. opponent strategy'
     try:
         s = exact_stationary(myProbs, hisProbs)
     except ValueError:
-        return stationary_score2(myProbs, hisProbs, scores, useEigen=False)
-    return numpy.dot(s, numpy.array(scores))
+        s = stationary_dist(myProbs, hisProbs)
+    return ((scores * s).sum(), 
+            ((scores[0], scores[2], scores[1], scores[3]) * s).sum())
 
 def generate_corners(epsilon=0.01):
     'generate all corners of 4D unit hypercube, with error rate epsilon'
@@ -792,7 +786,7 @@ def optimal_corner(hisProbs, scores, **kwargs):
     'find best strategy in response to a given 4D strategy'
     l = []
     for myProbs in generate_corners(**kwargs):
-        l.append((stationary_score(myProbs, hisProbs, scores), myProbs))
+        l.append((stationary_scores(myProbs, hisProbs, scores)[0], myProbs))
     l.sort()
     return l
 
@@ -800,7 +794,7 @@ def all_vs_all(scores, **kwargs):
     'rank all possible strategies by their minimum score vs. all strategies'
     l = []
     for myProbs in generate_corners(**kwargs):
-        l.append((min([(stationary_score(myProbs, hisProbs, scores), hisProbs)
+        l.append((min([(stationary_scores(myProbs, hisProbs, scores)[0], hisProbs)
                        for hisProbs in generate_corners(**kwargs)]), myProbs))
     l.sort()
     return l
@@ -809,25 +803,19 @@ def population_optimum(myFrac, hisFrac, hisProbs, scores, epsilon=0.05):
     'find optimal corner strategy at the specified population fraction'
     l = []
     for myProbs in generate_corners(epsilon):
-        sAB = stationary_score(myProbs, hisProbs, scores)
-        sBA = stationary_score(hisProbs, myProbs, scores)
+        sAB, sBA = stationary_scores(myProbs, hisProbs, scores)
         l.append((hisFrac * sAB - myFrac * sBA, myProbs))
     l.sort()
     return l[-1]
 
-def reciprocal_scores(myProbs, hisProbs, scores):
-    sAB = stationary_score(myProbs, hisProbs, scores)
-    sBA = stationary_score(hisProbs, myProbs, scores)
-    return sAB, sBA
-
 def self_scores(hisProbs, scores, epsilon=0.05):
     allC = (1. - epsilon,1. - epsilon,1. - epsilon,1. - epsilon,)
-    sAA = stationary_score(allC, allC, scores)
-    sBB = stationary_score(hisProbs, hisProbs, scores)
+    sAA = stationary_scores(allC, allC, scores)[0]
+    sBB = stationary_scores(hisProbs, hisProbs, scores)[0]
     return sAA, sBB
 
 def population_score_diff(myFrac, hisFrac, myProbs, hisProbs, scores):
-    sAB, sBA = reciprocal_scores(myProbs, hisProbs, scores)
+    sAB, sBA = stationary_scores(myProbs, hisProbs, scores)
     return hisFrac * sAB - myFrac * sBA
 
 def population_optimum2(myFrac, hisFrac, hisProbs, scores, epsilon=0.05):
@@ -839,7 +827,7 @@ def population_optimum2(myFrac, hisFrac, hisProbs, scores, epsilon=0.05):
                               hisProbs, scores, hisFrac, epsilon)
 
 def fitness_ratio(myFrac, hisFrac, myProbs, hisProbs, scores, myBase, hisBase):
-    sAB, sBA = reciprocal_scores(myProbs, hisProbs, scores)
+    sAB, sBA = stationary_scores(myProbs, hisProbs, scores)
     return (myBase + hisFrac * sAB) / (hisBase + myFrac * sBA)
 
 def moran_optimum(m, n, hisProbs, scores, epsilon=0.05, start=None, 
@@ -879,9 +867,8 @@ def population_diff(myFrac, myProbs, hisProbs, scores, hisFrac=None,
     e_ = 1. - epsilon
     sAA = e_ * e_ * scores[0] + e_ * epsilon * (scores[1] + scores[2]) \
         + epsilon * epsilon * scores[3]
-    sBB = stationary_score(hisProbs, hisProbs, scores)
-    sAB = stationary_score(myProbs, hisProbs, scores)
-    sBA = stationary_score(hisProbs, myProbs, scores)
+    sBB = stationary_scores(hisProbs, hisProbs, scores)[0]
+    sAB, sBA = stationary_scores(myProbs, hisProbs, scores)
     return myFrac * sAA + hisFrac * sAB \
         - hisFrac * sBB - myFrac * sBA 
 
