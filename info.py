@@ -1068,6 +1068,8 @@ class ScoreSequence(object):
         self.max = max(scores)
         self.data = []
     def save_outcomes(self, outcomes):
+        if not outcomes: # no data, so nothing to save
+            return
         self.data.append((sum([self.scoreDict[o] for o in outcomes]) 
                           / float(len(outcomes)),
                           sum([self.scoreDict2[o] for o in outcomes]) 
