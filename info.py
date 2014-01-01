@@ -1085,7 +1085,7 @@ class ScoreSequence(object):
                                             (1., 1., ydata[-1]))
             try:
                 stddev = sqrt(pcov[2,2])
-            except TypeError:
+            except (TypeError,ValueError):
                 stddev = None
         except RuntimeError: # handle instant convergence case...
             try:
