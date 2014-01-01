@@ -1,10 +1,11 @@
 import random
 from scipy import stats, optimize
-from math import log, exp
+from math import log, exp, sqrt
 from numpy import linalg
 import numpy
 import functools
 import hashlib
+import players
 
 ##################################################################
 # information metric calculations
@@ -196,9 +197,11 @@ class GroupMaxStrategy(InfogainStrategy):
         if hisP >= 0.5: # cooperate with any inference player
             myMove = 'C'
             self.myIpPC = 1. - epsilon
+            self.isFoe = False
         else: # apply optimal strategy vs. group
             self.myIpPC = add_noise(optimalStrategy[self.last_move], epsilon)
             myMove = stochastic_move(optimalStrategy[self.last_move])
+            self.isFoe = True
         self.update_hmm(epsilon, optimalStrategy)
         return myMove
     def update_hmm(self, epsilon, optimalStrategy):
@@ -279,6 +282,7 @@ class InferGroupPlayer(object):
         self.nIpCurrent = -99999 # force initial update
         self.nrecalc = nrecalc
         self.name = name
+        self.optimizer = StrategyOptimizer(scores)
     def next_move(self):
         hisIpP = 1. / (numpy.exp(-self.hisIpLOD) + 1.)
         myIpP = 1. / (numpy.exp(-self.myIpLOD) + 1.)
@@ -325,26 +329,28 @@ class InferGroupPlayer(object):
         counts = self.get_group_counts(post)
         self.groupState = dict(CC=counts[:2], DC=counts[2:4], 
                                CD=counts[4:6], DD=counts[6:]) # swap to my POV
-        self.update_strategy(nIp, counts, optFunc)
-    def update_strategy(self, nIp, counts, optFunc=None, countsMin=1000):
-        if not hasattr(self, 'optimalStrategy') or \
-                counts[1::2].sum() < countsMin or \
-                (nIp >= getattr(self, 'switchLower', 0) and
-                 nIp <= getattr(self, 'switchUpper', self.nplayer)):
-            s, self.switchLower, self.switchUpper = \
-                choose_allc_vs_alld(counts, nIp, self.nplayer, self.scores)
-            self.optimalStrategy = dict(CC=s[0], CD=s[1], DC=s[2], DD=s[3])
-            #print '%1.0f, %1.0f, %1.0f, %1.0f' % (counts[1::2].sum(), 
-            #   self.optimalStrategy['CC'], self.switchLower, self.switchUpper)
-        #if abs(self.nIpCurrent - nIp) >= self.nrecalc or \
-        #        self.nround % self.optCycles == 0: # update optimal strategy 
-        #    self.nIpCurrent = nIp # save new count
-        #    s, r = optFunc(nIp, self.nplayer, groupStrategy, 
-        #                   self.scores, epsilon=self.epsilon)
-        #    self.optimalStrategy = dict(CC=s[0], CD=s[1], DC=s[2], DD=s[3])
-        #    return True
+        self.update_strategy(nIp, counts, outcomes, optFunc)
+    def update_strategy(self, nIp, counts, outcomes, 
+                        optFunc=None, countsMin=1000):
+        groupOutcomes = [o for (i,o) in enumerate(outcomes)
+                         if getattr(self.players[i], 'isFoe', False)]
+        s = self.optimizer.update_strategy(groupOutcomes, counts, nIp,
+                                           self.nplayer, self.epsilon)
+        if s:
+            self.optimalStrategy = dict(CC=s[0], CD=s[1], DC=s[2], 
+                                        DD=s[3])
     def do_groupmax(self, i):
         return self.players[i].nround >= self.nwait
+    def get_group_scores(self, outcomes):
+        'get my average score, his average score, count vs. the group'
+        myScore = hisScore = n = 0
+        for i,p in enumerate(self.players):
+            if getattr(p, 'isFoe', False):
+                myScore += self.scores[outcomes[i]] 
+                hisScore += self.scores[swap_moves(outcomes[i])]
+                n += 1
+        if n > 0:
+            return float(myScore) / n, float(hisScore) / n, n
     def get_group_weights(self, post, filterFunc=None):
         if filterFunc is None and self.nround == self.nwait: # get group players by p-value
             filterFunc = lambda x:numpy.array(
@@ -397,9 +403,6 @@ class InferGroupPlayer2(InferGroupPlayer):
 
 class InferGroupPlayerZeroNoise(InferGroupPlayer2):
     'for use with epsilon=0'
-    def do_groupmax(self, i):
-        'perform groupmax as soon as non-inf players detected'
-        return self.players[i].mismatches > 0
     def report_mismatches(self, post):
         'report non-inf players'
         return numpy.array([(p.mismatches > 0) for p in self.players])
@@ -522,18 +525,30 @@ class MultiplayerTournament(object):
             elif j > die:
                 player.replace(die)
     def report(self, scores):
-        s = n = 0.
+        d = {}
+        n = nInfogain = 0
         for i,p in enumerate(self.players):
-            if p.is_inference_player():
-                s += scores[i]
-                n += 1
-        if n > 0 and n < len(scores):
-            return n, (s / n) / ((sum(scores) - s) / (len(scores) - n))
+            try:
+                l = d[p.name]
+            except KeyError:
+                l = d[p.name] = [0, 0]
+            l[0] += scores[i]
+            l[1] += 1.
+            if isinstance(p, InferGroupPlayer):
+                n += len(p.players)
+                for ps in p.players:
+                    if not getattr(ps, '_inGroupMax', False):
+                        nInfogain += 1
+        results = {'infogain':float(nInfogain) / n}
+        for k,v in d.items():
+            results[k] = v[0] / v[1]
+            results['#' + k] = v[1]
+        return results
 
     def get_player_names(self):
         return [p.name for p in self.players]
 
-    def check_accuracy(self):
+    def check_accuracy(self, *args):
         names = self.get_player_names()
         n = 0
         d = {}
@@ -638,15 +653,16 @@ def save_tournaments(nIp, nplayer, nmax=100, filename='out.log',
 
 def check_accuracy(nIp, n, pvec=None, ncycle=100, klass=InferGroupPlayer2,
                    epsilon=0.05, tournamentClass=MultiplayerTournament2,
-                   scores=(2, -1, 3, 0)):
+                   scores=(2, -1, 3, 0), methodName='report'):
     if epsilon == 0.:
         klass = InferGroupPlayerZeroNoise
     tour = build_tournament(nIp, n, pvec, klass=klass, epsilon=epsilon,
                             tournamentClass=tournamentClass, scores=scores)
     l = []
+    reportMethod = getattr(tour, methodName)
     for i in range(ncycle):
         scores = tour.do_round()
-        l.append(tour.check_accuracy())
+        l.append(reportMethod(scores))
         replicate, die = exp_imitation(scores)
         if replicate != die:
             tour.replace(die, replicate)
@@ -880,12 +896,16 @@ def population_diff(myFrac, myProbs, hisProbs, scores, hisFrac=None,
     return myFrac * sAA + hisFrac * sAB \
         - hisFrac * sBB - myFrac * sBA 
 
-def sample_posterior_strategies(counts, nsample=100):
+def sample_posterior_strategies(counts, epsilon, nsample=100):
     'return sample of strategy vectors drawn from posterior distribution'
     l = []
     for i in range(0, 8, 2):
         rv = stats.beta(counts[i] + 1, counts[i + 1] - counts[i] + 1)
-        l.append(rv.rvs(nsample))
+        data = rv.rvs(nsample)
+        if epsilon > 0.: # truncate to accessible region
+            data[data < epsilon] = epsilon
+            data[data > 1. - epsilon] = 1. - epsilon
+        l.append(data)
     return zip(*l)
     
 def get_sample_scores(myProbs, pvecSample, scores):
@@ -901,21 +921,218 @@ def get_intersections(lineSample1, lineSample2):
     l.sort()
     return l
 
-def choose_allc_vs_alld(counts, m, n, scores, p=0.05, nsample=100):
-    allc = (1., 1., 1., 1.)
+def choose_allc_vs_alld(counts, m, n, scores, coop=(1., 1., 1., 1.), 
+                        epsilon=0.05, p=0.05, nsample=100):
     alld = (0., 0., 0., 0.)
-    pvecSample = sample_posterior_strategies(counts, nsample)
-    scoreSampleC = get_sample_scores(allc, pvecSample, scores)
+    pvecSample = sample_posterior_strategies(counts, epsilon, nsample)
+    scoreSampleC = get_sample_scores(coop, pvecSample, scores)
     scoreSampleD = get_sample_scores(alld, pvecSample, scores)
     lineSampleC = get_line_params(scoreSampleC, n)
     lineSampleD = get_line_params(scoreSampleD, n)
     mSample = get_intersections(lineSampleC, lineSampleD)
-    if m < mSample[len(mSample) / 2]:
-        best = allc
+    i = int(p * len(mSample))
+    if m < mSample[-i - 1] + 20:
+        best = coop
     else:
         best = alld
-    i = int(p * len(mSample))
     return best, mSample[i], mSample[-i - 1]
+
+class StrategyOptimizer(object):
+    def __init__(self, scores, tolerance=0.05,
+                 candidates=(players.allc, players.tft, players.wsls, 
+                             players.zdr2, players.alld)):
+        self.scores = scores
+        self.tolerance = tolerance
+        self.strategies = {}
+        for pvec in candidates:
+            self.strategies[pvec] = StrategyScorer(pvec, scores)
+        self.current = None
+    def update_strategy(self, outcomes, counts, m, n, epsilon, 
+                        nsample=200):
+        if self.current in self.strategies:
+            self.strategies[self.current].save_outcomes(outcomes)
+        if m > n / 2:  # in the majority, just use ALLD
+            if self.current != players.alld:
+                return self.start_strategy(players.alld, outcomes)
+            else: # already set, so nothing to do
+                return None
+        if not self.need_refresh(m, n):
+            return None
+        pvecSample = sample_posterior_strategies(counts, epsilon, 
+                                                 nsample)
+        l = []
+        d = {}
+        for pvec, strategyScorer in self.strategies.items():
+            strategyScorer.compute_scores(pvecSample, epsilon)
+            delta = strategyScorer.best_estimate(m, n)
+            l.append((delta, pvec))
+            d[pvec] = delta
+        l.sort()
+        best = l[-1][1] # best strategy
+        if self.current is None or self.current != best and \
+                l[-1][0] > d[self.current] + self.tolerance:
+            return self.start_strategy(best, outcomes)
+    def start_strategy(self, best, outcomes):
+        #print 'STRATEGY:', best
+        self.current = best
+        self.strategies[best].start_record(len(outcomes))
+        return best
+    def need_refresh(self, m, n):
+        if not self.current:
+            return True
+        strategy = self.strategies[self.current]
+        if strategy.need_refresh(m, n):
+            self.nrefresh = 0
+            return True
+        self.nrefresh += 1
+        return self.nrefresh % 20 == 0
+
+        
+
+class StrategyScorer(object):
+    'predict distribution of stationary score for a specific strategy'
+    def __init__(self, pvec, scores):
+        self.pvec = pvec
+        self.scores = scores
+        self.empiricalData = []
+    def compute_scores(self, pvecSample, epsilon):
+        'save (sAB, sBA) for me vs. each model in pvecSample'
+        s = add_noise_vector(self.pvec, epsilon)
+        self.scoreSample = get_sample_scores(s, pvecSample, self.scores)
+    def predict_delta(self, m, n, p=0.025):
+        'mean, lower & upper bound estimates for score delta'
+        fA, fB = get_population_fractions(m, n)
+        l = [(fB * t[0] - fA * t[1]) for t in self.scoreSample]
+        l.sort()
+        i = int(p * len(l))
+        self.mean = sum(l) / len(l)
+        self.lower = l[i]
+        self.upper = l[-i - 1]
+        #print 'predict %s %1.3f %1.3f %1.3f' \
+        #    % (str(self.pvec), self.mean, self.lower, self.upper)
+        return self.mean, self.lower, self.upper
+    def best_estimate(self, m, n):
+        if not self.empiricalData:
+            return self.predict_delta(m, n)[0]
+        scoreSequence = self.get_best_score_sequence()
+        delta = choose_empirical_vs_predicted_mean(scoreSequence, self, 
+                                                   m, n)
+        self.mean = delta
+        #print '\tBEST %1.3f' % delta
+        return delta
+    def get_best_score_sequence(self):
+        l = [(len(ss.data), ss) for ss in self.empiricalData]
+        l.sort()
+        return l[-1][1] # longest ScoreSequence
+    def start_record(self, ngroup):
+        self.empiricalData.append(ScoreSequence(ngroup, self.scores))
+    def save_outcomes(self, outcomes):
+        self.empiricalData[-1].save_outcomes(outcomes)
+    def need_refresh(self, m, n):
+        scoreSequence = self.empiricalData[-1]
+        if len(scoreSequence.data) < 20:
+            return True
+
+
+def get_population_fractions(m, n):
+    return (m + 1.) / n, float(n - m) / n
+
+def choose_empirical_vs_predicted_mean(scoreSequence, strategyScorer, m, n):
+    meanPred, lowerPred, upperPred = strategyScorer.predict_delta(m, n)
+    t = scoreSequence.fit_stationary(m, n)
+    if not t: # no empirical prediction
+        return meanPred
+    meanEmp, lowerEmp, upperEmp = t
+    strategyScorer.lower = lowerEmp # assign empirical bounds
+    strategyScorer.upper = upperEmp
+    if lowerPred <= meanEmp and meanEmp <= upperPred:
+        return meanEmp
+    elif lowerEmp <= meanPred and meanPred <= upperEmp:
+        return meanPred
+    elif lowerEmp <= upperPred and upperPred <= upperEmp:
+        return (lowerEmp + upperPred) / 2.
+    elif lowerPred <= upperEmp and upperEmp <= upperPred:
+        return (lowerPred + upperEmp) / 2.
+    else:
+        return meanEmp
+
+class ScoreSequence(object):
+    'exponential fit to sequence of avg. scores'
+    def __init__(self, n, scores):
+        self.n = n
+        self.scoreDict = dict(CC=scores[0], CD=scores[1], DC=scores[2], 
+                              DD=scores[3])
+        self.scoreDict2 = dict(CC=scores[0], DC=scores[1], CD=scores[2], 
+                              DD=scores[3])
+        self.min = min(scores)
+        self.max = max(scores)
+        self.data = []
+    def save_outcomes(self, outcomes):
+        self.data.append((sum([self.scoreDict[o] for o in outcomes]) 
+                          / float(len(outcomes)),
+                          sum([self.scoreDict2[o] for o in outcomes]) 
+                          / float(len(outcomes))))
+    def fit_stationary(self, m, n):
+        if len(self.data) < 3: # sequence too short to fit
+            return None
+        def func(x, a, b, c):
+            return a * numpy.exp(-b * x) + c
+        xdata = numpy.arange(len(self.data))
+        fA, fB = get_population_fractions(m, n)
+        ydata = numpy.array([(fB * t[0] - fA * t[1]) for t in self.data])
+        try:
+            popt, pcov = optimize.curve_fit(func, xdata, ydata,
+                                            (1., 1., ydata[-1]))
+            try:
+                stddev = sqrt(pcov[2,2])
+            except TypeError:
+                stddev = None
+        except RuntimeError: # handle instant convergence case...
+            try:
+                popt, pcov = optimize.curve_fit(func, xdata, ydata, 
+                                                (1., 20., ydata[-1]))
+            except RuntimeError: # unable to fit, so give up!
+                return None
+            diff = numpy.array(self.data[1:]) - popt[2]
+            stddev = sqrt((diff * diff).mean() / len(diff))
+        y = func(xdata, *popt) # compute deviation from our curve fit
+        diff = y - ydata
+        sigma = sqrt((diff * diff).mean() / len(diff))
+        if stddev is None:
+            #print '\trefit:', ydata, diff
+            if len(self.data) < 4: # sequence too short to fit
+                #print '\tCATCH'
+                stddev = self.max - self.min # sigma not accurate
+            else:
+                stddev = sigma
+        mean = popt[2]
+        lower = mean - 2. * stddev # 95% confidence interval
+        upper = mean + 2. * stddev
+        # try to improve a bound based on last point fit
+        if popt[0] > 0:
+            upper = tightest_bound(upper, y[-1], 2 * sigma)
+        else:
+            lower = tightest_bound(lower, y[-1], -2 * sigma)
+        mean = restrict_range(mean, lower, upper)
+        mean = restrict_range(mean, self.min, self.max)
+        #print '\tempirical %1.3f %1.3f %1.3f' % (mean, lower, upper)
+        self.mean, self.lower, self.upper = mean, lower, upper
+        return mean, lower, upper
+
+def tightest_bound(bound1, last, diff):
+    bound2 = last + diff
+    if bound1 * diff < bound2 * diff:
+        return bound1
+    else:
+        return bound2
+
+def restrict_range(x, bottom, top):
+    'restrict x to interval [bottom, top]'
+    if x > top:
+        return top
+    elif x < bottom:
+        return bottom
+    return x
 
 def add_noise(p, epsilon):
     return p * (1. - epsilon) + (1. - p) * epsilon
