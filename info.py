@@ -403,6 +403,12 @@ class InferGroupPlayer2(InferGroupPlayer):
 
 class InferGroupPlayerZeroNoise(InferGroupPlayer2):
     'for use with epsilon=0'
+    #def do_groupmax(self, i):
+    #    'exit infogain at first mismatch, if sufficient groupState counts'
+    #    return self.players[i].nround >= self.nwait or \
+    #        (self.nround >= self.nwait and 
+    #         sum([t[1] for t in getattr(self, 'groupState', {}).values()]) 
+    #         > 1000 and self.players[i].mismatches > 0)
     def report_mismatches(self, post):
         'report non-inf players'
         return numpy.array([(p.mismatches > 0) for p in self.players])
@@ -412,6 +418,12 @@ class InferGroupPlayerZeroNoise(InferGroupPlayer2):
 
 class TagStrategy(GroupMaxStrategy):
     hisIpPC = myIpPC = 0.5
+    def next_move(self, epsilon=0.05, hisP=0, myP=0, optimalStrategy=None):
+        if self.last_move and optimalStrategy:
+            return GroupMaxStrategy.next_move(self, epsilon, hisP, myP, 
+                                              optimalStrategy)
+        else:
+            return 'C'
     def update_hmm(self, epsilon, optimalStrategy):
         pass
 
@@ -431,13 +443,17 @@ class InferGroupPlayerTags(InferGroupPlayer):
             else:
                 self.hisIpLOD[i] = 999.
                 nIp += 1
-        counts = self.get_group_counts(post)
-        self.groupState = dict(CC=counts[:2], DC=counts[2:4], 
-                               CD=counts[4:6], DD=counts[6:]) # swap to my POV
-        if self.nround > 1:
-            self.update_strategy(nIp, counts)
+        if nIp > self.nplayer / 2:
+            return players.alld
         else:
-            self.optimalStrategy = dict(CC=1., CD=1., DC=1., DD=1.)
+            return players.zdr2
+        #counts = self.get_group_counts(post)
+        #self.groupState = dict(CC=counts[:2], DC=counts[2:4], 
+        #                       CD=counts[4:6], DD=counts[6:]) # swap to my POV
+        #if self.nround > 1:
+        #    self.update_strategy(nIp, counts)
+        #else:
+        #    self.optimalStrategy = dict(CC=1., CD=1., DC=1., DD=1.)
         
     
 
@@ -719,9 +735,9 @@ def time_to_identify(pvec, pId=.001, klass=InfogainStrategy, epsilon=0.05):
         t = inferencePlayer.save_outcome(last_move)
         hisP *= t[0]
         myP *= t[1]
-        print inferencePlayer.myIpMoves[-1] + inferencePlayer.hisIpMoves[-1],\
-            move1 + move2, last_move, (myP, hisP), \
-            inferencePlayer.match_pval(epsilon)
+        #print inferencePlayer.myIpMoves[-1] + inferencePlayer.hisIpMoves[-1],\
+        #    move1 + move2, last_move, (myP, hisP), \
+        #    inferencePlayer.match_pval(epsilon)
             
         markovPlayer.save_outcome(swap_moves(last_move))
         n += 1
