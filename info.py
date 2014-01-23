@@ -102,22 +102,28 @@ def tie_breaker(history):
     i = ord(hashlib.md5(''.join(history)).digest()[0]) & 1 # LSB of hash
     return 'CD'[i]
 
-def simple_infogain_move(lastMove, state, history):
+def simple_infogain_move(lastMove, state):
     l = [(expectation_count(myMove, lastMove, state), myMove)
          for myMove in 'CD']
     l.sort()
     if l[0][0] < l[1][0]: # we have a winner!
         return l[0][1]
     else: # tie
+        return None
+
+def infogain_move(state, history):
+    m = simple_infogain_move(history[-1], state)
+    if m:
+        return m
+    else:
         return tie_breaker(history)
 
-def opponent_infogain_move(lastMove, state, history):
-    lastMove = swap_moves(lastMove)
-    d = {}
-    for k,v in state.items():
-        d[swap_moves(k)] = v
-    history = [swap_moves(g) for g in history]
-    return simple_infogain_move(lastMove, d, history)
+def opponent_infogain_move(hisState, history):
+    m = simple_infogain_move(swap_moves(history[-1]), hisState)
+    if m:
+        return m
+    else:
+        return tie_breaker([swap_moves(g) for g in history])
 
 def move_likelihood(pC, move):
     if move == 'C':
@@ -146,10 +152,8 @@ class InfogainStrategy(object):
         self.mismatches = 0
     def next_move(self, epsilon=0.05, **kwargs):
         if self.last_move:
-            myMove = simple_infogain_move(self.last_move, self.state, 
-                                          self.history)
-            hisMove = opponent_infogain_move(self.last_move, self.state, 
-                                             self.history)
+            myMove = infogain_move(self.state, self.history)
+            hisMove = opponent_infogain_move(self.hisState, self.history)
         else:
             myMove = hisMove = self._firstMove
         self.myIpMoves.append(myMove)
@@ -1064,7 +1068,7 @@ class StrategyOptimizer(object):
                 return True # need to update minority strategy
         elif self.majorityStrategy[0] < self.conf:
             return True # need to update majority strategy
-        if self.nrefresh < 20: # monitor new strategy closely
+        if self.nrefresh < 5: # monitor new strategy closely
             return True
         if not self.transition or m < self.transition[0] or \
                 m > self.transition[-1]: # not in transition zone
