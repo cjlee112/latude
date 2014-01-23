@@ -193,29 +193,31 @@ class GroupMaxStrategy(InfogainStrategy):
         self.pPartner = 1. / (exp(-myIpLOD) + 1.)
         self.tau = tau
         self.last_move2 = self.last_move # keep history for 2 moves...
-    def next_move(self, epsilon=0.05, hisP=0, myP=0, optimalStrategy=None):
+    def next_move(self, epsilon=0.05, hisP=0, myP=0, optimalStrategy=None, selfStrategy=None):
         if hisP >= 0.5: # cooperate with any inference player
-            myMove = 'C'
-            self.myIpPC = 1. - epsilon
+            s = selfStrategy
             self.isFoe = False
         else: # apply optimal strategy vs. group
-            self.myIpPC = add_noise(optimalStrategy[self.last_move], epsilon)
-            myMove = stochastic_move(optimalStrategy[self.last_move])
+            s = optimalStrategy
             self.isFoe = True
-        self.update_hmm(epsilon, optimalStrategy)
+        self.myIpPC = add_noise(s[self.last_move], epsilon)
+        myMove = stochastic_move(s[self.last_move])
+        self.update_hmm(epsilon, optimalStrategy, selfStrategy)
         return myMove
-    def update_hmm(self, epsilon, optimalStrategy):
+    def update_hmm(self, epsilon, optimalStrategy, selfStrategy):
         '2-state HMM for whether inf-player is partnering with us or not'
+        ctx = swap_moves(self.last_move2)
         p1 = ((1. - self.tau) * self.pPartner 
               + self.tau * (1. - self.pPartner)) \
-            * move_likelihood(1. - epsilon, self.last_move[1]) # partner
-        ctx = swap_moves(self.last_move2)
+              * move_likelihood(add_noise(selfStrategy[ctx], epsilon), 
+                                self.last_move[1]) # partner
         p2 = (self.tau * self.pPartner 
               + (1. - self.tau) * (1. - self.pPartner)) \
               * move_likelihood(add_noise(optimalStrategy[ctx], epsilon),
                                 self.last_move[1]) # not partnering with me
         self.pPartner = p = p1 / (p1 + p2)
-        pC = p + (1. - p) * optimalStrategy[swap_moves(self.last_move)]
+        ctx = swap_moves(self.last_move)
+        pC = p * selfStrategy[ctx] + (1. - p) * optimalStrategy[ctx]
         self.hisIpPC = add_noise(pC, epsilon) # p(inf-player cooperates w/ me)
         self.last_move2 = self.last_move
 
@@ -289,7 +291,8 @@ class InferGroupPlayer(object):
         moves = []
         for i, p in enumerate(self.players):
             m = p.next_move(self.epsilon, hisP=hisIpP[i], myP=myIpP[i], 
-                      optimalStrategy=getattr(self, 'optimalStrategy', None))
+                      optimalStrategy=getattr(self, 'optimalStrategy', None),
+                            selfStrategy=self.optimizer.selfStrategy)
             moves.append(m)
         return moves
     def save_outcome(self, outcomes, optFunc=None):
@@ -663,12 +666,13 @@ def check_accuracy(nIp, n, pvec=None, ncycle=100, klass=InferGroupPlayer2,
     for i in range(ncycle):
         scores = tour.do_round()
         l.append(reportMethod(scores))
+        #print '#I:', l[-1]['#I']
         replicate, die = exp_imitation(scores)
         if replicate != die:
             tour.replace(die, replicate)
         if tour.fixation_status():
             break
-    return l
+    return l, tour
 
 class Runner(object):
     def __init__(self, *args):
@@ -883,6 +887,14 @@ def diff_optimum(m, n, hisProbs, scores, epsilon=0.05, **kwargs):
     return moran_optimum(m, n, hisProbs, scores, epsilon, negFunc=negFunc, 
                          **kwargs)
 
+def optimize_selfscore(scores, epsilon=0.05, start=(1., 1., 1., 1.)):
+    'find strategy that maximizes its self-score'
+    def neg_selfscore(pvec):
+        pvec = add_noise_vector(pvec, epsilon)
+        return -stationary_scores(pvec, pvec, scores)[0]
+    return optimize.fmin_tnc(neg_selfscore, start, bounds=[(0,1)]*4, 
+                             approx_grad=True, messages=0, maxfun=1000)[0]
+
 def population_diff(myFrac, myProbs, hisProbs, scores, hisFrac=None, 
                     epsilon=0.05):
     'compute relative score for strategy pair at specified population fraction'
@@ -937,55 +949,134 @@ def choose_allc_vs_alld(counts, m, n, scores, coop=(1., 1., 1., 1.),
         best = alld
     return best, mSample[i], mSample[-i - 1]
 
+class StrategyDict(dict):
+    'allow approximate matches to handle slight variation in optima'
+    def __init__(self, digits=3):
+        self.digits = digits
+        dict.__init__(self)
+    def approx_key(self, k):
+        return tuple([round(v, self.digits) for v in k])
+    def __getitem__(self, k):
+        return dict.__getitem__(self, self.approx_key(k))
+    def __setitem__(self, k, v):
+        return dict.__setitem__(self, self.approx_key(k), v)
+        
+
+
 class StrategyOptimizer(object):
-    def __init__(self, scores, tolerance=0.05,
+    def __init__(self, scores, epsilon=0.05, tolerance=0.05, conf=0.9,
                  candidates=(players.allc, players.tft, players.wsls, 
                              players.zdr2, players.alld)):
         self.scores = scores
         self.tolerance = tolerance
-        self.strategies = {}
+        self.conf = conf
+        self.strategies = StrategyDict()
         for pvec in candidates:
             self.strategies[pvec] = StrategyScorer(pvec, scores)
         self.current = None
-    def update_strategy(self, outcomes, counts, m, n, epsilon, 
-                        nsample=200):
-        if self.current in self.strategies:
-            self.strategies[self.current].save_outcomes(outcomes)
-        if m > n / 2:  # in the majority, just use ALLD
-            if self.current != players.alld:
-                return self.start_strategy(players.alld, outcomes)
-            else: # already set, so nothing to do
-                return None
-        if not self.need_refresh(m, n):
-            return None
+        self.nrefresh = 0
+        s = optimize_selfscore(self.scores, epsilon)
+        self.selfStrategy = dict(CC=s[0], CD=s[1], DC=s[2], DD=s[3])
+    def save_optimal_strategy(self, groupStrategy, m, n, epsilon):
+        'search for optimal strategy and add to self.strategies if new'
+        s = diff_optimum(m, n, groupStrategy, self.scores, epsilon)[0]
+        try:
+            self.strategies[s]
+        except KeyError: # new strategy, so add it to our options
+            self.strategies[s] = StrategyScorer(s, self.scores)
+    def update_sampling(self, counts, n, epsilon, nsample=200):
+        'draw posterior score dist for each of our possible strategies'
+        groupStrategy = (counts[::2] + 1.) / (counts[1::2] + 2.)
+        self.save_optimal_strategy(groupStrategy, 0, n, epsilon)
+        self.save_optimal_strategy(groupStrategy, n - 1, n, epsilon)
         pvecSample = sample_posterior_strategies(counts, epsilon, 
                                                  nsample)
-        l = []
-        d = {}
         for pvec, strategyScorer in self.strategies.items():
             strategyScorer.compute_scores(pvecSample, epsilon)
-            delta = strategyScorer.best_estimate(m, n)
-            l.append((delta, pvec))
-            d[pvec] = delta
+        self.minorityStrategy = self.assess_confidence(0, n)[-1]
+        self.majorityStrategy = self.assess_confidence(n - 1, n)[-1]
+    def update_strategy(self, outcomes, counts, m, n, epsilon, 
+                        nsample=200):
+        #if self.current in self.strategies:
+        #    self.strategies[self.current].save_outcomes(outcomes)
+        if not self.need_refresh(m, n):
+            return None
+        print 'update', m, self.nrefresh
+        self.update_sampling(counts, n, epsilon, nsample)
+        self.transition = self.compute_transition(n)
+        candidate = self.get_candidate(m)
+        if candidate == self.current:
+            return None
+        elif not self.current:
+            return self.start_strategy(candidate, outcomes)
+        if m == 0: 
+            conf = self.minorityStrategy[0]
+        elif m == n - 1:
+            conf = self.majorityStrategy[0]
+        else:
+            conf = [t[0] for t in self.assess_confidence(m, n)
+                    if t[1] == candidate][0]
+        if conf >= self.conf: # confidently better, so switch strategy
+            return self.start_strategy(candidate, outcomes)
+    def get_candidate(self, m, p=0.5):
+        if not self.transition: # minor == major
+            return self.minorityStrategy[1] # one pvec to rule them all
+        i = int(p * len(self.transition))
+        if m < self.transition[i]:
+            return self.minorityStrategy[1]
+        else:
+            return self.majorityStrategy[1]
+    def assess_confidence(self, m, n):
+        'get sorted list of (conf, s) for all relevant strategies'
+        d = {}
+        for pvec, strategyScorer in self.strategies.items():
+            d[pvec] = deltas = strategyScorer.compute_deltas(m, n)
+            nsample = len(deltas)
+        maxDelta = [max([deltas[i] for deltas in d.values()])
+                    for i in range(nsample)]
+        l = []
+        for pvec, deltas in d.items():
+            nbest = sum([1 for i in range(nsample) 
+                         if deltas[i] >= maxDelta[i] - self.tolerance])
+            l.append((nbest / float(len(deltas)), pvec))
         l.sort()
-        best = l[-1][1] # best strategy
-        if self.current is None or self.current != best and \
-                l[-1][0] > d[self.current] + self.tolerance:
-            return self.start_strategy(best, outcomes)
+        return l
+    def compute_transition(self, n):
+        minor = self.minorityStrategy[1]
+        major = self.majorityStrategy[1]
+        if minor == major:
+            return None
+        minorSample = get_line_params(self.strategies[minor].scoreSample, n)
+        majorSample = get_line_params(self.strategies[major].scoreSample, n)
+        return get_intersections(minorSample, majorSample)
     def start_strategy(self, best, outcomes):
-        #print 'STRATEGY:', best
+        print 'STRATEGY:', best
         self.current = best
+        self.nrefresh = 0
         self.strategies[best].start_record(len(outcomes))
         return best
-    def need_refresh(self, m, n):
+    def need_refresh(self, m, n, p=0.5):
+        self.nrefresh += 1
         if not self.current:
             return True
-        strategy = self.strategies[self.current]
-        if strategy.need_refresh(m, n):
-            self.nrefresh = 0
+        if m <= n / 2:
+            if self.minorityStrategy[0] < self.conf:
+                return True # need to update minority strategy
+        elif self.majorityStrategy[0] < self.conf:
+            return True # need to update majority strategy
+        if self.nrefresh < 20: # monitor new strategy closely
             return True
-        self.nrefresh += 1
-        return self.nrefresh % 20 == 0
+        if not self.transition or m < self.transition[0] or \
+                m > self.transition[-1]: # not in transition zone
+            return False
+        if getattr(self, 'zoneCheck', True): # 1st time in zone?
+            self.zoneCheck = False
+            return True # force an update
+        i = int(p * len(self.transition))
+        if self.current == self.minorityStrategy[1]:
+            return m > self.transition[i] # nearing transition to major
+        else:
+            return m < self.transition[i] # nearing transition to minor
 
         
 
@@ -999,10 +1090,12 @@ class StrategyScorer(object):
         'save (sAB, sBA) for me vs. each model in pvecSample'
         s = add_noise_vector(self.pvec, epsilon)
         self.scoreSample = get_sample_scores(s, pvecSample, self.scores)
-    def predict_delta(self, m, n, p=0.025):
+    def compute_deltas(self, m, n):
         'mean, lower & upper bound estimates for score delta'
         fA, fB = get_population_fractions(m, n)
-        l = [(fB * t[0] - fA * t[1]) for t in self.scoreSample]
+        return [(fB * t[0] - fA * t[1]) for t in self.scoreSample]
+    def predict_delta(self, m, n, p=0.025):
+        l = self.compute_deltas(m, n)
         l.sort()
         i = int(p * len(l))
         self.mean = sum(l) / len(l)
