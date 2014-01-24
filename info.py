@@ -968,7 +968,7 @@ class StrategyDict(dict):
 
 
 class StrategyOptimizer(object):
-    def __init__(self, scores, epsilon=0.05, tolerance=0.05, conf=0.9,
+    def __init__(self, scores, epsilon=0.05, tolerance=0.02, conf=0.8,
                  candidates=(players.allc, players.tft, players.wsls, 
                              players.zdr2, players.alld)):
         self.scores = scores
@@ -1005,7 +1005,7 @@ class StrategyOptimizer(object):
         #    self.strategies[self.current].save_outcomes(outcomes)
         if not self.need_refresh(m, n):
             return None
-        print 'update', m, self.nrefresh
+        #print 'update', m, self.nrefresh
         self.update_sampling(counts, n, epsilon, nsample)
         self.transition = self.compute_transition(n)
         candidate = self.get_candidate(m)
@@ -1054,7 +1054,7 @@ class StrategyOptimizer(object):
         majorSample = get_line_params(self.strategies[major].scoreSample, n)
         return get_intersections(minorSample, majorSample)
     def start_strategy(self, best, outcomes):
-        print 'STRATEGY:', best
+        #print 'STRATEGY:', best
         self.current = best
         self.nrefresh = 0
         self.strategies[best].start_record(len(outcomes))
@@ -1068,8 +1068,8 @@ class StrategyOptimizer(object):
                 return True # need to update minority strategy
         elif self.majorityStrategy[0] < self.conf:
             return True # need to update majority strategy
-        if self.nrefresh < 5: # monitor new strategy closely
-            return True
+        if self.nrefresh < 20: # monitor new strategy closely
+            return self.nrefresh <=5 or self.nrefresh % 5 == 0
         if not self.transition or m < self.transition[0] or \
                 m > self.transition[-1]: # not in transition zone
             return False
