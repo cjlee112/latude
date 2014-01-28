@@ -260,6 +260,7 @@ def plot_selection_stddev(n=1000., neutral=0.01):
         
 def sample_id_odds(nsample=1000, func=info_test.recognize_other, 
                    **kwargs):
+    'get sorted sample of odds and pvalues from specified ID challenge func'
     odds = []
     pvals = []
     for i in range(nsample):
@@ -270,12 +271,82 @@ def sample_id_odds(nsample=1000, func=info_test.recognize_other,
     pvals.sort()
     return odds, pvals
 
-def plot_roc(pvals1, pvals2):
-    j = 0
-    n = len(pvals1)
-    y = numpy.zeros(n)
-    for i,p in enumerate(pvals1):
-        while j < len(pvals2) and pvals2[j] <= p:
-            j += 1
-        y[i] = j
-    pyplot.plot(numpy.arange(n) / float(n), y / float(len(pvals2)))
+def id_odds_dist(ncycle, pvec=None, epsilon=0.05, **kwargs):
+    'get sorted odds and pvalues for self vs. pvec identification sample'
+    oddsIP, pvalsIP = sample_id_odds(ncycle=ncycle, epsilon=epsilon,
+                                     func=info_test.recognize_self, **kwargs)
+    oddsGP, pvalsGP = sample_id_odds(ncycle=ncycle, pvec=pvec, epsilon=epsilon,
+                                     func=info_test.recognize_other, **kwargs)
+    return oddsIP, pvalsIP, oddsGP, pvalsGP
+
+def calc_roc(pvalsFP, pvalsTP):
+    'compute the ROC curve for the specified FP vs. TP score distributions'
+    l = [(p, 0) for p in pvalsFP] + [(p, 1) for p in pvalsTP]
+    l.sort()
+    nTP = float(len(pvalsTP))
+    nFP = float(len(pvalsFP))
+    c = [0, 0]
+    i = 0
+    roc = [(0., 0.)]
+    while i < len(l):
+        cut = l[i][0]
+        while i < len(l) and l[i][0] <= cut:
+            c[l[i][1]] += 1
+            i += 1
+        roc.append((c[0] / nFP, c[1] / nTP))
+    return roc
+
+def calc_auc(pvalsFP, pvalsTP):
+    'compute the ROC area-under-the-curve'
+    roc = calc_roc(pvalsFP, pvalsTP)
+    xlast, ylast = roc[0]
+    auc = 0.
+    for x,y in roc[1:]: # numerically integrate area under curve
+        auc += (x - xlast) * (y + ylast) / 2.
+        xlast, ylast = x, y
+    return auc
+
+def calc_id_auc(ncycle, pvec=None, epsilon=0.05, **kwargs):
+    'compute AUC for self vs. pvec identification'
+    oddsIP, pvalsIP, oddsGP, pvalsGP = id_odds_dist(ncycle, pvec, epsilon, 
+                                                    **kwargs)
+    return calc_auc(pvalsIP, pvalsGP)
+    
+def plot_auc(rounds=range(2, 11), **kwargs):
+    'plot AUC over specified number of infogain cycles'
+    l = []
+    for ncycle in rounds:
+        l.append(calc_id_auc(ncycle, **kwargs))
+    pyplot.plot(rounds, l)
+
+def id_auc_fig(pvec=players.zdr2, epsilons=(0.1, 0.05, 0.01, 0.)):
+    'AUC figure for specified pvec, for different epsilon values'
+    for epsilon in epsilons:
+        plot_auc(pvec=pvec, epsilon=epsilon)
+    pyplot.ylim(ymax=1.01)
+    pyplot.xlabel('number of infogain rounds')
+    pyplot.ylabel('AUC')
+    pyplot.tight_layout()
+
+
+def plot_roc(ncycle=10, pvec=None, epsilon=0.05, label=None, **kwargs):
+    'plot ROC for specified number of infogain cycles'
+    oddsIP, pvalsIP, oddsGP, pvalsGP = id_odds_dist(ncycle, pvec, epsilon, 
+                                                    **kwargs)
+    roc = calc_roc(pvalsIP, pvalsGP)
+    pyplot.plot([t[0] for t in roc], [t[1] for t in roc], label=label)
+
+def id_roc_fig(strategies=(players.zdr2, players.zdx, players.tft,
+                           players.wsls, players.allc, players.alld),
+               labels=('ZDR2', 'ZDX', 'TFT', 'WSLS', 'ALLC', 'ALLD'),
+               epsilon=0.05):
+    'ROC figure for identification of specified list of strategies'
+    for i,pvec in enumerate(strategies):
+        plot_roc(pvec=pvec, epsilon=epsilon, label=labels[i])
+    pyplot.xlim(xmin=-0.01, xmax=0.4)
+    pyplot.xticks((0., 0.1, 0.2, 0.3, 0.4))
+    pyplot.ylim(ymin=0.8, ymax=1.01)
+    pyplot.xlabel('FP')
+    pyplot.ylabel('TP')
+    pyplot.legend(loc='lower right')
+    pyplot.tight_layout()
