@@ -145,6 +145,21 @@ def inf_popscore_fig():
     pyplot.ylabel('fitness difference')
     pyplot.show()
 
+def make_popscore_figs(epsilons=(0, 0.05), **kwargs):
+    'produce a set of popscore figs for strategies specified by kwargs'
+    for name, strategy in kwargs.items():
+        for epsilon in epsilons:
+            fname = '%s_%s.eps' % (name, str(epsilon))
+            print 'generating %s...' % fname
+            pyplot.figure()
+            popscore_fig(hisProbs=strategy, epsilon=epsilon)
+            pyplot.savefig(fname)
+
+def default_popscore_figs():
+    'make standard popscore figs for art-of-war paper'
+    make_popscore_figs(allc=players.allc, alld=players.alld, 
+                       tft=players.tft, wsls=players.wsls, 
+                       zdr2=players.zdr2, zdx=players.zdx)
         
 def read_csv(csvfile):
     with open(csvfile, 'rb') as ifile:
