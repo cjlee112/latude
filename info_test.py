@@ -1,36 +1,46 @@
 import info
 
-def recognize_self(ncycle=10, epsilon=0.05, klass=info.InfogainStrategy):
+def recognize_self(ncycle=10, epsilon=0.05, klass=info.InfogainStrategy,
+                   epsilonMin=1e-6):
     'compute odds and pvals for IP pair to recognize each other'
+    if epsilon < epsilonMin:
+        epsilonIP = epsilonMin
+    else:
+        epsilonIP = epsilon
     ip1 = klass()
     ip2 = klass()
     p1 = p2 = 1.
     for i in range(ncycle):
-        m1 = info.move_with_error(ip1.next_move(epsilon), epsilon)
-        m2 = info.move_with_error(ip2.next_move(epsilon), epsilon)
+        m1 = info.move_with_error(ip1.next_move(epsilonIP), epsilon)
+        m2 = info.move_with_error(ip2.next_move(epsilonIP), epsilon)
         p12, p11 = ip1.save_outcome(m1 + m2, epsilon)
         p21, p22 = ip2.save_outcome(m2 + m1, epsilon)
         assert p12 == p22 and p21 == p11
         p2 *= p12
         p1 *= p21
     #print 'mismatches:', ip2.mismatches, ip1.mismatches
-    return p1, ip2.match_pval(epsilon), p2, ip1.match_pval(epsilon)
+    return p1, ip2.match_pval(epsilonIP), p2, ip1.match_pval(epsilonIP)
 
 def recognize_other(pvec=None, ncycle=10, epsilon=0.05, 
                     klass=info.InfogainStrategy,
-                    klass2=info.MarkovStrategy):
+                    klass2=info.MarkovStrategy,
+                    epsilonMin=1e-6):
     'compute odds and pval for IP to recognize Markov player'
+    if epsilon < epsilonMin:
+        epsilonIP = epsilonMin
+    else:
+        epsilonIP = epsilon
     ip1 = klass()
     mp2 = klass2(pvec)
     p2 = 1.
     for i in range(ncycle):
-        m1 = info.move_with_error(ip1.next_move(epsilon), epsilon)
+        m1 = info.move_with_error(ip1.next_move(epsilonIP), epsilon)
         m2 = info.move_with_error(mp2.next_move(epsilon), epsilon)
         p12, p11 = ip1.save_outcome(m1 + m2, epsilon)
         mp2.save_outcome(m2 + m1)
         p2 *= p12
     #print 'mismatches:', ip1.mismatches
-    return p2, ip1.match_pval(epsilon)
+    return p2, ip1.match_pval(epsilonIP)
 
 def state_from_history(history):
     n = len(history)
