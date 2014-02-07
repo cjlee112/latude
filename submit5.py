@@ -44,5 +44,5 @@ if __name__ == '__main__':
         submit_job(*sys.argv[1:])
     else:
         print '''%s player nIp [epsilon, default 0.05] [n, def 100]
-    [runName] [nrun, def 1000] [ncpu def 20] [queue, def medium]
+    [nrun, def 1000] [ncpu def 20] [queue, def medium] [runName]
 ''' % sys.argv[0]
