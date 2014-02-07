@@ -410,6 +410,9 @@ class InferGroupPlayer2(InferGroupPlayer):
 
 class InferGroupPlayerZeroNoise(InferGroupPlayer2):
     'for use with epsilon=0'
+    def do_groupmax(self, i):
+        return self.players[i].nround >= self.nwait or \
+            (self.nround >= self.nwait and self.players[i].mismatches > 0)
     def report_mismatches(self, post):
         'report non-inf players'
         return numpy.array([(p.mismatches > 0) for p in self.players])
