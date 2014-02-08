@@ -24,7 +24,7 @@ def run_score_diffs(player, minSample=20, epsilon=0.05, n=100, runName=None):
 
 
 if __name__ == '__main__':
-    if len(sys.argv[1:]) >= 2:
+    if len(sys.argv[1:]) >= 1:
         run_score_diffs(*sys.argv[1:])
     else:
         print '''%s player [minSample, default 20] [epsilon, def 0.05]
