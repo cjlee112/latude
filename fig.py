@@ -1,6 +1,9 @@
 import info
 import players
-from matplotlib import pyplot
+try:
+    from matplotlib import pyplot
+except ImportError:
+    pass
 import numpy
 import random
 import csv
