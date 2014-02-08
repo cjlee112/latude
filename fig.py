@@ -350,3 +350,18 @@ def id_roc_fig(strategies=(players.zdr2, players.zdx, players.tft,
     pyplot.ylabel('TP')
     pyplot.legend(loc='lower right')
     pyplot.tight_layout()
+
+
+def collect_score_diffs(pvec=None, minSample=100, iSample=-1, 
+                        nIp=1, n=100, epsilon=0.05, ncycle=10000):
+    'draw sample of S_I - S_G as a function of m'
+    diffs = numpy.zeros(n)
+    counts = numpy.zeros(n)
+    while counts[iSample] < minSample:
+        l, tour = info.check_accuracy(nIp, n, pvec, ncycle, epsilon=epsilon)
+        for d in l:
+            m = d['#I']
+            diffs[m] += d['I'] - d['M'] # difference in average scores
+            counts[m] += 1
+    return diffs, counts
+
