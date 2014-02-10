@@ -356,15 +356,25 @@ def id_roc_fig(strategies=(players.zdr2, players.zdx, players.tft,
 
 
 def collect_score_diffs(pvec=None, minSample=100, iSample=-1, 
-                        nIp=1, n=100, epsilon=0.05, ncycle=10000):
+                        nIp=1, n=100, epsilon=0.05, ncycle=10000, nrun=50):
     'draw sample of S_I - S_G as a function of m'
     diffs = numpy.zeros(n)
     counts = numpy.zeros(n)
-    while counts[iSample] < minSample:
+    i = 0
+    while counts[iSample] < minSample or i < nrun:
         l, tour = info.check_accuracy(nIp, n, pvec, ncycle, epsilon=epsilon)
+        i += 1
         for d in l:
             m = d['#I']
             diffs[m] += d['I'] - d['M'] # difference in average scores
             counts[m] += 1
     return diffs, counts
 
+def read_score_diffs(fname):
+    'read csv file consisting of one row of diffs and one row of counts'
+    with open(fname, 'rb') as csvfile:
+        csvreader = csv.reader(csvfile)
+        it = iter(csvreader)
+        diffs = numpy.array([float(s) for s in it.next()][1:])
+        counts = numpy.array([float(s) for s in it.next()][1:])
+    return diffs, counts
