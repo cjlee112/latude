@@ -8,6 +8,8 @@ import numpy
 import random
 import csv
 import info_test
+import glob
+import os.path
 
 def plot_selfscore(kappa=None, xvals=numpy.arange(0., 1.001, 0.01),
                    scores=(2, -1, 3, 0), epsilon=0.05, **kwargs):
@@ -122,9 +124,13 @@ def plot_popscore_diff2(pvec, hisProbs=players.tft, n=100,
         pyplot.text(labelX, l[labelX - 1], label)
     return l
 
-def popscore_fig(**kwargs):
-    plot_popscore_diff2(0, infPlayer=True, label='INFO', labelX=90, linewidth=3,
-                        **kwargs)
+def popscore_fig(ip0Scores=None, **kwargs):
+    if ip0Scores is not None: # plot empirical score curve
+        n = len(ip0Scores) + 1
+        pyplot.plot(range(1, n), ip0Scores, linewidth=3)
+        pyplot.text(90, ip0Scores[90 - 1], 'IP0')
+    #plot_popscore_diff2(0, infPlayer=True, label='INFO', labelX=90, linewidth=3,
+    #                    **kwargs)
     plot_popscore_diff2(players.allc, label='ALLC', **kwargs)
     plot_popscore_diff2(players.alld, label='ALLD', labelX=50, **kwargs)
     plot_popscore_diff2(players.zdr2, label='ZDR0.5', labelX=50, **kwargs)
@@ -378,3 +384,29 @@ def read_score_diffs(fname):
         diffs = numpy.array([float(s) for s in it.next()][1:])
         counts = numpy.array([float(s) for s in it.next()][1:])
     return diffs, counts
+
+def get_score_diff_files(pattern='*.csv'):
+    'get dict of files of the form allc_0.05_whatever.csv'
+    d = {}
+    for fname in glob.glob(pattern):
+        try:
+            player, epsilon = os.path.basename(fname).split('_')[:2]
+        except ValueError:
+            continue
+        epsilon = float(epsilon)
+        diffs, counts = read_score_diffs(fname)
+        d[(player, epsilon)] = diffs / counts
+    return d
+
+
+def save_popscore_figs(pattern):
+    d = get_score_diff_files(pattern)
+    for t,sd in d.items():
+        player, epsilon = t
+        fname = '%s_%d.eps' % (player, int(100 * epsilon))
+        print 'Saving', fname
+        pvec = getattr(players, player)
+        pyplot.figure()
+        popscore_fig(sd, hisProbs=pvec, epsilon=epsilon)
+        pyplot.savefig(fname)
+
