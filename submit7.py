@@ -1,16 +1,7 @@
-import subprocess
-import sys
-
-def submit_job(chi, kappa, epsilon=0.05, nIp=1, n=100,
-               nrun=1000, ncpu=20, queue='medium', runName=None, player='zd'):
-    if not runName:
-        runName = '%s_%s_%s_%s' %(player, str(chi), str(kappa), str(epsilon))
-    s = '''#!/usr/bin/python
+#!/usr/bin/python
 #$ -S /usr/bin/python
 #$ -cwd
-#$ -t 1-%(ncpu)s:1
-#$ -q %(queue)s
-#$ -l mem=1G
+#$ -q medium
 #$ -o output
 #$ -e errors
 
@@ -19,32 +10,32 @@ sys.path.append(os.getcwd())
 import info
 import players
 
-pvec = players.ss_vector(%(chi)s, kappa=%(kappa)s)
-epsilon=%(epsilon)s
-if epsilon == 0.:
-    klass = info.InferGroupPlayerZeroNoise
-else:
-    klass=info.InferGroupPlayer2
+def run_zd_tournaments(chi, kappa, epsilon=0.05, nIp=1, n=100,
+                       nrun=1000, ncpu=20, player='zd', runName=None):
+    chi, kappa, epsilon, nIp, n, nrun, ncpu = float(chi), float(kappa), \
+        float(epsilon), int(nIp), int(n), int(nrun), int(ncpu)
+    if not runName:
+        runName = '%s_%s_%s_%s' %(player, str(chi), str(kappa), str(epsilon))
+    pvec = players.ss_vector(chi, kappa=kappa)
+    if epsilon == 0.:
+        klass = info.InferGroupPlayerZeroNoise
+    else:
+        klass=info.InferGroupPlayer2
 
-info.save_tournaments(%(nIp)s, %(n)s, %(nrun)s - %(ncpu)s + 1, 
-                      "%(runName)s.log", epsilon=epsilon, 
-                      klass=klass, pvec=pvec,
-                      name="%(player)s", selectionFunction=info.exp_imitation,
-                      tournamentClass=info.MultiplayerTournament2,
-                      scores=(2, -1, 3, 0))
-''' % dict(player=player, nIp=str(nIp), n=str(n), runName=runName,
-           epsilon=str(epsilon), queue=queue, ncpu=str(ncpu), nrun=str(nrun),
-           chi=chi, kappa=kappa)
-    script = runName + '.py'
-    with open(script, 'w') as ifile:
-        ifile.write(s)
-    subprocess.call(['qsub', script])
+    info.save_tournaments(nIp, n, nrun - ncpu + 1, 
+                          runName + ".log", epsilon=epsilon, 
+                          klass=klass, pvec=pvec,
+                          name=player, selectionFunction=info.exp_imitation,
+                          tournamentClass=info.MultiplayerTournament2,
+                          scores=(2, -1, 3, 0))
 
 
 if __name__ == '__main__':
     if len(sys.argv[1:]) >= 2:
-        submit_job(*sys.argv[1:])
+        run_zd_tournaments(*sys.argv[1:])
     else:
         print '''%s chi kappa [epsilon, default 0.05] [nIp, def 1] [n, def 100]
-    [runName] [nrun, def 1000] [ncpu def 20] [queue, def medium]
+    [nrun, def 1000] [ncpu def 20] [playerName def zd] [runName] 
+
+RUNS: IP0 vs. ZD(chi, kappa) player tournaments
 ''' % sys.argv[0]
