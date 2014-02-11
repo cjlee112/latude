@@ -1,8 +1,10 @@
-import glob
+import glob, os.path
 from scipy import stats
 import csv
 
 def get_log_params(logname):
+    'return params dict from standard logfile name'
+    logname = os.path.basename(logname)
     l = logname[:logname.rindex('.')].split('_')
     if len(l) == 5:
         return dict(invader=l[0], defender=l[1], 
@@ -18,6 +20,7 @@ def get_log_params(logname):
                         start=start, n=n, epsilon=float(l[3]))
 
 def analyze_log(filename, invader, start, n):
+    'extract wins, runs, pUnder and pOver from logfile'
     pNeutral = float(start) / n
     wins = runs = 0
     with open(filename, 'rU') as ifile:
@@ -36,6 +39,7 @@ def analyze_log(filename, invader, start, n):
     return wins, runs, b.sf(wins - 1), b.cdf(wins)
 
 def analyze_logs(pattern='*.log', paramsFunc=get_log_params):
+    'analyze log files matching pattern, with params extracted from filenames'
     l = []
     for logfile in glob.glob(pattern):
         d = paramsFunc(logfile)
@@ -54,10 +58,23 @@ columns = ('invader', 'defender', 'start', 'n', 'wins', 'runs',
            'pUnder', 'pOver', 'epsilon')
 
 def save_csv(results, filename='results.csv', cols=columns):
+    'write specified columns to csv file from list of dictionaries'
     with open(filename, 'wb') as csvfile:
         writer = csv.writer(csvfile)
         for d in results:
             writer.writerow([d[k] for k in cols])
+
+
+def assess_zd_chi(filename='zd_results.csv', pattern='zd_*.log', start=1, 
+                  n=100):
+    'generate csv results from zd_CHI_KAPPA_EPSILON.log files'
+    def get_zd_params(logname):
+        logname = os.path.basename(logname)
+        l = logname[:logname.rindex('.')].split('_')
+        return dict(invader='I', defender=l[0], start=start, n=n, 
+                    chi=float(l[1]), kappa=float(l[2]), epsilon=float(l[3]))
+    data = analyze_logs(pattern, get_zd_params)
+    save_csv(data, filename, columns + ('chi', 'kappa'))
 
 if __name__ == '__main__':
     l = analyze_logs()
