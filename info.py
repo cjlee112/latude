@@ -420,10 +420,20 @@ class InferGroupPlayerZeroNoise(InferGroupPlayer2):
         return InferGroupPlayer2.get_group_weights(self, post, 
                                                    self.report_mismatches)
 
-class TagStrategy(GroupMaxStrategy):
+class TagStrategy(InfogainStrategy):
+    'use hisP from tag info to choose selfStrategy vs. optimalStrategy'
     hisIpPC = myIpPC = 0.5
-    def update_hmm(self, epsilon, optimalStrategy):
-        pass
+    def next_move(self, epsilon=0.05, hisP=0, myP=0, optimalStrategy=None, selfStrategy=None):
+        if not self.last_move:
+            return self._firstMove
+        elif hisP >= 0.5: # cooperate with any inference player
+            s = selfStrategy
+            self.isFoe = False
+        else: # apply optimal strategy vs. group
+            s = optimalStrategy
+            self.isFoe = True
+        myMove = stochastic_move(s[self.last_move])
+        return myMove
 
 class InferGroupPlayerTags(InferGroupPlayer):
     'positive control: use true identities to get optimal strategy'
@@ -445,7 +455,7 @@ class InferGroupPlayerTags(InferGroupPlayer):
         self.groupState = dict(CC=counts[:2], DC=counts[2:4], 
                                CD=counts[4:6], DD=counts[6:]) # swap to my POV
         if self.nround > 1:
-            self.update_strategy(nIp, counts)
+            self.update_strategy(nIp, counts, outcomes)
         else:
             self.optimalStrategy = dict(CC=1., CD=1., DC=1., DD=1.)
         
