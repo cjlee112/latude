@@ -124,20 +124,22 @@ def plot_popscore_diff2(pvec, hisProbs=players.tft, n=100,
         pyplot.text(labelX, l[labelX - 1], label)
     return l
 
-def popscore_fig(ip0Scores=None, **kwargs):
+def popscore_fig(ip0Scores=None, ip0X=90, allcX=1, alldX=50, zdr2X=50,
+                 zdtX=90, condefX=20, **kwargs):
     if ip0Scores is not None: # plot empirical score curve
         n = len(ip0Scores) + 1
         pyplot.plot(range(1, n), ip0Scores, linewidth=3)
-        pyplot.text(90, ip0Scores[90 - 1], 'IP0')
+        pyplot.text(90, ip0Scores[ip0X - 1], 'IP0')
     #plot_popscore_diff2(0, infPlayer=True, label='INFO', labelX=90, linewidth=3,
     #                    **kwargs)
-    plot_popscore_diff2(players.allc, label='ALLC', **kwargs)
-    plot_popscore_diff2(players.alld, label='ALLD', labelX=50, **kwargs)
-    plot_popscore_diff2(players.zdr2, label='ZDR0.5', labelX=50, **kwargs)
+    plot_popscore_diff2(players.allc, label='ALLC', labelX=allcX, **kwargs)
+    plot_popscore_diff2(players.alld, label='ALLD', labelX=alldX, **kwargs)
+    plot_popscore_diff2(players.zdr2, label='ZDR0.5', labelX=zdr2X, **kwargs)
     plot_popscore_diff2(players.zdr2, pvecSelf=players.allc, linestyle='--',
-                        label='ZDt', labelX=90, **kwargs)
+                        label='ZDt', labelX=zdtX, **kwargs)
     plot_popscore_diff2(players.alld, pvecSelf=players.allc, linestyle=':',
-                        label='ConDef', labelX=20, **kwargs)
+                        label='ConDef', labelX=condefX, color='k', 
+                        linewidth=2, **kwargs)
     pyplot.xlabel('population fraction (%)')
     pyplot.ylabel('fitness difference')
     pyplot.tight_layout()
@@ -175,27 +177,28 @@ def read_csv(csvfile):
         return [t[:2] + [int(i) for i in t[2:6]] + [float(x) for x in t[6:]]
                 for t in csv.reader(ifile)]
 
-def plot_zd_selection(data, filterFunc, label=None):
+def plot_zd_selection(data, filterFunc, label=None, dy=0):
     l = [(t[-2], (float(t[4]) / t[5]) / (float(t[2]) / t[3])) for t in data
          if filterFunc(t)]
     l.sort()
     pyplot.semilogy([t[0] for t in l], [t[1] for t in l], marker='o')
     if label:
-        print 'label', l[0][0], l[0][1], label
-        pyplot.text(l[0][0], l[0][1], label)
+        pyplot.text(l[0][0], l[0][1] + dy, label)
 
 def plot_zd_data(data):
+    plot_zd_selection(data, lambda t:t[-1]==2 and t[-3]==0. and t[-2]>=0, 
+                      '$\epsilon=0$')
     plot_zd_selection(data, lambda t:t[-1]==2 and t[-3]==0.01 and t[-2]>=0, 
                       '$\epsilon=0.01$')
     plot_zd_selection(data, lambda t:t[-1]==2 and t[-3]==0.05 and t[-2]>=0, 
-                      '$\epsilon=0.05$')
+                      '$\epsilon=0.05$', -1)
     plot_zd_selection(data, lambda t:t[-1]==2 and t[-3]==0.1 and t[-2]>=0, 
-                      '$\epsilon=0.1$')
+                      '$\epsilon=0.1$', 1)
     plot_zd_selection(data, lambda t:t[-1]==0 and t[-3]==0.05 and t[-2]>=0, 
                       '$\kappa=0,\epsilon=0.05$')
     pyplot.xlim(xmin=0, xmax=1)
     pyplot.xlabel('$\chi$')
-    pyplot.ylabel('robustness')
+    pyplot.ylabel('IP0 invasion success')
     pyplot.tight_layout()
 
 def zd_robustness_fig(csvfile='zd_results.csv'):
@@ -404,9 +407,18 @@ def save_popscore_figs(pattern):
     for t,sd in d.items():
         player, epsilon = t
         fname = '%s_%d.eps' % (player, int(100 * epsilon))
-        print 'Saving', fname
         pvec = getattr(players, player)
         pyplot.figure()
-        popscore_fig(sd, hisProbs=pvec, epsilon=epsilon)
+        if player == 'wsls':
+            alldX = 70
+        else:
+            alldX = 50
+        if player == 'zdx':
+            condefX = 10
+        else:
+            condefX = 20
+        print 'Saving', fname
+        popscore_fig(sd, hisProbs=pvec, epsilon=epsilon, alldX=alldX,
+                     condefX=condefX)
         pyplot.savefig(fname)
 
