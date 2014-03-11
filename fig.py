@@ -134,7 +134,7 @@ def popscore_fig(ip0Scores=None, ip0X=90, allcX=1, alldX=50, zdr2X=50,
     #                    **kwargs)
     plot_popscore_diff2(players.allc, label='ALLC', labelX=allcX, **kwargs)
     plot_popscore_diff2(players.alld, label='ALLD', labelX=alldX, **kwargs)
-    plot_popscore_diff2(players.zdr2, label='ZDR0.5', labelX=zdr2X, **kwargs)
+    plot_popscore_diff2(players.zdr2, label='ZDR', labelX=zdr2X, **kwargs)
     plot_popscore_diff2(players.zdr2, pvecSelf=players.allc, linestyle='--',
                         label='ZDt', labelX=zdtX, **kwargs)
     plot_popscore_diff2(players.alld, pvecSelf=players.allc, linestyle=':',
@@ -393,22 +393,37 @@ def read_score_diffs(fname):
         counts = numpy.array([float(s) for s in it.next()][1:])
     return diffs, counts
 
-def get_score_diff_files(pattern='*.csv'):
+def get_score_diff_files(patterns=('*.csv',)):
     'get dict of files of the form allc_0.05_whatever.csv'
     d = {}
-    for fname in glob.glob(pattern):
-        try:
-            player, epsilon = os.path.basename(fname).split('_')[:2]
-        except ValueError:
-            continue
-        epsilon = float(epsilon)
-        diffs, counts = read_score_diffs(fname)
-        d[(player, epsilon)] = diffs / counts
+    for pattern in patterns: # can search multiple locations
+        for fname in glob.glob(pattern):
+            try:
+                player, epsilon = os.path.basename(fname).split('_')[:2]
+            except ValueError:
+                continue
+            epsilon = float(epsilon)
+            diffs, counts = read_score_diffs(fname)
+            try: # combine datasets for same (player, epsilon)
+                d[(player, epsilon)].append((diffs, counts))
+            except KeyError:
+                d[(player, epsilon)] = [(diffs, counts)]
+    for k, v in d.items():
+        d[k] = score_diff_average(v)
     return d
 
+def score_diff_average(l):
+    'combine multiple score diff datasets to average score diff array'
+    def add(x, y):
+        return x + y
+    if len(l) > 1:
+        diffs = reduce(add, [t[0] for t in l])
+        counts = reduce(add, [t[1] for t in l])
+    else:
+        diffs, counts = l[0]
+    return diffs / counts
 
-def save_popscore_figs(pattern):
-    d = get_score_diff_files(pattern)
+def save_popscore_figs(d):
     for t,sd in d.items():
         player, epsilon = t
         fname = '%s_%d.eps' % (player, int(100 * epsilon))
