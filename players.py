@@ -24,8 +24,13 @@ tft = (1.,0.,1.,0.)
 wsls = (1.,0.,0.,1.)
 alld = (0.,0.,0.,0.)
 allc = (1.,1.,1.,1.)
+
+# zd players for standard PD game matrix
 zdx = zd_vector1(2.)
 zdgtft2 = zd_vector2(2.)
-zdr2 = zdr_vector(0.5)
 
-__all__ = ['tft', 'wsls', 'alld', 'allc', 'zdx', 'zdgtft2', 'zdr2']
+# zd players for donation game matrix used by stewart and plotkin
+zdr2 = zdr_vector(0.5)
+zdx2 = ss_vector(0.5, kappa=0.)
+
+__all__ = ['tft', 'wsls', 'alld', 'allc', 'zdx', 'zdgtft2', 'zdr2', 'zdx2']
