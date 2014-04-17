@@ -134,7 +134,7 @@ def popscore_fig(ip0Scores=None, ip0X=90, allcX=1, alldX=50, zdr2X=50,
     #                    **kwargs)
     plot_popscore_diff2(players.allc, label='ALLC', labelX=allcX, **kwargs)
     plot_popscore_diff2(players.alld, label='ALLD', labelX=alldX, **kwargs)
-    plot_popscore_diff2(players.zdr2, label='ZDR0.5', labelX=zdr2X, **kwargs)
+    plot_popscore_diff2(players.zdr2, label='ZDR', labelX=zdr2X, **kwargs)
     plot_popscore_diff2(players.zdr2, pvecSelf=players.allc, linestyle='--',
                         label='ZDt', labelX=zdtX, **kwargs)
     plot_popscore_diff2(players.alld, pvecSelf=players.allc, linestyle=':',
@@ -177,11 +177,13 @@ def read_csv(csvfile):
         return [t[:2] + [int(i) for i in t[2:6]] + [float(x) for x in t[6:]]
                 for t in csv.reader(ifile)]
 
-def plot_zd_selection(data, filterFunc, label=None, dy=0):
+def plot_zd_selection(data, filterFunc=lambda t:True, label=None, dy=0, 
+                      marker='o', **kwargs):
     l = [(t[-2], (float(t[4]) / t[5]) / (float(t[2]) / t[3])) for t in data
          if filterFunc(t)]
     l.sort()
-    pyplot.semilogy([t[0] for t in l], [t[1] for t in l], marker='o')
+    pyplot.semilogy([t[0] for t in l], [t[1] for t in l], marker=marker, 
+                    **kwargs)
     if label:
         pyplot.text(l[0][0], l[0][1] + dy, label)
 
@@ -189,7 +191,7 @@ def plot_zd_data(data):
     plot_zd_selection(data, lambda t:t[-1]==2 and t[-3]==0. and t[-2]>=0, 
                       '$\epsilon=0$')
     plot_zd_selection(data, lambda t:t[-1]==2 and t[-3]==0.01 and t[-2]>=0, 
-                      '$\epsilon=0.01$')
+                      '$\epsilon=0.01$', -0.3)
     plot_zd_selection(data, lambda t:t[-1]==2 and t[-3]==0.05 and t[-2]>=0, 
                       '$\epsilon=0.05$', -1)
     plot_zd_selection(data, lambda t:t[-1]==2 and t[-3]==0.1 and t[-2]>=0, 
@@ -201,9 +203,12 @@ def plot_zd_data(data):
     pyplot.ylabel('IP0 invasion success')
     pyplot.tight_layout()
 
-def zd_robustness_fig(csvfile='zd_results.csv'):
+def zd_robustness_fig(csvfile='zd_results.csv', tagfile='tag_results.csv'):
     data = read_csv(csvfile)
     plot_zd_data(data)
+    data = read_csv(tagfile)
+    plot_zd_selection(data, label='ConSwitch ($\epsilon=0$)', marker='^', 
+                      linestyle='--', color='k')
     
 def plot_identify_cdf(pvec, n=10000, label='', **kwargs):
     l = [info.time_to_identify(pvec,  **kwargs) for i in range(n)]
@@ -388,22 +393,37 @@ def read_score_diffs(fname):
         counts = numpy.array([float(s) for s in it.next()][1:])
     return diffs, counts
 
-def get_score_diff_files(pattern='*.csv'):
+def get_score_diff_files(patterns=('*.csv',)):
     'get dict of files of the form allc_0.05_whatever.csv'
     d = {}
-    for fname in glob.glob(pattern):
-        try:
-            player, epsilon = os.path.basename(fname).split('_')[:2]
-        except ValueError:
-            continue
-        epsilon = float(epsilon)
-        diffs, counts = read_score_diffs(fname)
-        d[(player, epsilon)] = diffs / counts
+    for pattern in patterns: # can search multiple locations
+        for fname in glob.glob(pattern):
+            try:
+                player, epsilon = os.path.basename(fname).split('_')[:2]
+            except ValueError:
+                continue
+            epsilon = float(epsilon)
+            diffs, counts = read_score_diffs(fname)
+            try: # combine datasets for same (player, epsilon)
+                d[(player, epsilon)].append((diffs, counts))
+            except KeyError:
+                d[(player, epsilon)] = [(diffs, counts)]
+    for k, v in d.items():
+        d[k] = score_diff_average(v)
     return d
 
+def score_diff_average(l):
+    'combine multiple score diff datasets to average score diff array'
+    def add(x, y):
+        return x + y
+    if len(l) > 1:
+        diffs = reduce(add, [t[0] for t in l])
+        counts = reduce(add, [t[1] for t in l])
+    else:
+        diffs, counts = l[0]
+    return diffs / counts
 
-def save_popscore_figs(pattern):
-    d = get_score_diff_files(pattern)
+def save_popscore_figs(d):
     for t,sd in d.items():
         player, epsilon = t
         fname = '%s_%d.eps' % (player, int(100 * epsilon))
