@@ -353,9 +353,9 @@ def plot_roc(ncycle=10, pvec=None, epsilon=0.05, label=None, **kwargs):
     roc = calc_roc(pvalsIP, pvalsGP)
     pyplot.plot([t[0] for t in roc], [t[1] for t in roc], label=label)
 
-def id_roc_fig(strategies=(players.zdr2, players.zdx, players.tft,
+def id_roc_fig(strategies=(players.zdr2, players.zdx2, players.tft,
                            players.wsls, players.allc, players.alld),
-               labels=('ZDR2', 'ZDX', 'TFT', 'WSLS', 'ALLC', 'ALLD'),
+               labels=('ZDR', 'ZDX', 'TFT', 'WSLS', 'ALLC', 'ALLD'),
                epsilon=0.05):
     'ROC figure for identification of specified list of strategies'
     for i,pvec in enumerate(strategies):
@@ -433,7 +433,7 @@ def save_popscore_figs(d):
             alldX = 70
         else:
             alldX = 50
-        if player == 'zdx':
+        if player == 'zdx' or player == 'zdx2':
             condefX = 10
         else:
             condefX = 20
