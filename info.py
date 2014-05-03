@@ -609,14 +609,20 @@ class MultiplayerTournamentTags(MultiplayerTournament2):
         except TypeError: # default: player does not accept tags
             return self.players[i].save_outcome(outcomes)
 
-def build_tournament(nIp, n, pvec=None, scores=(3,0,5,1), epsilon=0.05,
-                     klass=InferGroupPlayer, 
+def build_tournament(nIp, n, scores=(3,0,5,1), epsilon=0.05,
+                     klass=InferGroupPlayer, strategyKwargs={},
                      tournamentClass=MultiplayerTournament, **kwargs):
-    if pvec is None:
-        pvec = (1., 0., 1., 0.)
+    strategyKwargs = strategyKwargs.copy() # no side effects please
+    if 'pvec' not in strategyKwargs:
+        strategyKwargs['pvec'] = (1., 0., 1., 0.)
+    try: # pass strategy klass separately
+        kwargs['klass'] = strategyKwargs['klass']
+        del strategyKwargs['klass']
+    except KeyError:
+        pass
     l = [klass(n - 1, scores, epsilon) for i in range(nIp)]
     while len(l) < n:
-        l.append(GroupPlayer(n - 1, scores, strategyKwargs=dict(pvec=pvec),
+        l.append(GroupPlayer(n - 1, scores, strategyKwargs=strategyKwargs,
                              **kwargs))
     return tournamentClass(l, epsilon, scores)
 
@@ -642,9 +648,9 @@ def exp_imitation(scores, beta=1.):
     else:
         return j, i # replace i by j
 
-def run_tournament(nIp, n, pvec=None, selectionFunction=moran_selection,
+def run_tournament(nIp, n, selectionFunction=moran_selection,
                    selectionPeriod=1, **kwargs):
-    tour = build_tournament(nIp, n, pvec, **kwargs)
+    tour = build_tournament(nIp, n, **kwargs)
     fixed = False
     i = 0
     while not fixed:
@@ -988,7 +994,8 @@ class StrategyOptimizer(object):
         self.tolerance = tolerance
         self.conf = conf
         self.strategies = StrategyDict()
-        for pvec in candidates:
+        for c in candidates:
+            pvec = c['pvec']
             self.strategies[pvec] = StrategyScorer(pvec, scores)
         self.current = None
         self.nrefresh = 0
