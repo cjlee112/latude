@@ -17,17 +17,23 @@ def run_tournaments(player, player2, nIp, epsilon=0.05, n=100,
     if not runName:
         runName = '%s_%s_%s_%s_%s' %(player, player2, str(nIp), str(n), 
                                      str(epsilon))
-    pvec = getattr(players, player)
-    pvec2 = getattr(players, player2)
+    playerArgs = getattr(players, player)
+    try:
+        groupArgs = dict(klass=playerArgs['klass'])
+        playerArgs = playerArgs.copy()
+        del playerArgs['klass']
+    except KeyError:
+        groupArgs = {}
+    playerArgs2 = getattr(players, player2)
 
     def get_player(nothers, scores, eps):
-        return info.GroupPlayer(nothers, scores, 
-                                strategyKwargs=dict(pvec=pvec),
-                                name=player)
+        return info.GroupPlayer(nothers, scores, strategyKwargs=playerArgs,
+                                name=player, **groupArgs)
 
     info.save_tournaments(nIp, n, nrun - ncpu + 1, 
                           runName + ".log", epsilon=epsilon, 
-                          klass=get_player, pvec=pvec2, name=player2, 
+                          klass=get_player, strategyKwargs=playerArgs2, 
+                          name=player2, 
                           selectionFunction=info.exp_imitation,
                           tournamentClass=info.MultiplayerTournament2,
                           scores=(2, -1, 3, 0))

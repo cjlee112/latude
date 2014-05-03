@@ -16,7 +16,7 @@ def run_tournaments(player, nIp, epsilon=0.05, n=100,
         int(nrun), int(ncpu)
     if not runName:
         runName = '%s_%s_%s_%s' %(player, str(nIp), str(n), str(epsilon))
-    pvec = getattr(players, player)
+    opponent = getattr(players, player)
     if epsilon == 0.:
         klass = info.InferGroupPlayerZeroNoise
     else:
@@ -24,7 +24,7 @@ def run_tournaments(player, nIp, epsilon=0.05, n=100,
 
     info.save_tournaments(nIp, n, nrun - ncpu + 1, 
                           runName + ".log", epsilon=epsilon, 
-                          klass=klass, pvec=pvec,
+                          klass=klass, strategyKwargs=opponent,
                           name=player, selectionFunction=info.exp_imitation,
                           tournamentClass=info.MultiplayerTournament2,
                           scores=(2, -1, 3, 0))

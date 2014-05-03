@@ -1,3 +1,4 @@
+from mars import MarsStrategy
 
 def zd_vector1(chi):
     return (1. - (2. * chi - 2.) / (4. * chi + 1.), 0.,
@@ -20,17 +21,19 @@ def ss_vector(chi, phi=0.1, B=3, C=1, kappa=None, lambd=0.):
 
 
 
-tft = (1.,0.,1.,0.)
-wsls = (1.,0.,0.,1.)
-alld = (0.,0.,0.,0.)
-allc = (1.,1.,1.,1.)
+tft = dict(pvec=(1.,0.,1.,0.))
+wsls = dict(pvec=(1.,0.,0.,1.))
+alld = dict(pvec=(0.,0.,0.,0.))
+allc = dict(pvec=(1.,1.,1.,1.))
 
 # zd players for standard PD game matrix
-zdx = zd_vector1(2.)
-zdgtft2 = zd_vector2(2.)
+zdx = dict(pvec=zd_vector1(2.))
+zdgtft2 = dict(pvec=zd_vector2(2.))
 
 # zd players for donation game matrix used by stewart and plotkin
-zdr2 = zdr_vector(0.5)
-zdx2 = ss_vector(0.5, kappa=0.)
+zdr2 = dict(pvec=zdr_vector(0.5))
+zdx2 = dict(pvec=ss_vector(0.5, kappa=0.))
+
+mars = dict(klass=MarsStrategy)
 
 __all__ = ['tft', 'wsls', 'alld', 'allc', 'zdx', 'zdgtft2', 'zdr2', 'zdx2']
