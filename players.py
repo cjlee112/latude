@@ -22,6 +22,7 @@ def ss_vector(chi, phi=0.1, B=3, C=1, kappa=None, lambd=0.):
 
 
 tft = dict(pvec=(1.,0.,1.,0.))
+gtft = dict(pvec=(1.,0.05,1.,0.05))
 wsls = dict(pvec=(1.,0.,0.,1.))
 alld = dict(pvec=(0.,0.,0.,0.))
 allc = dict(pvec=(1.,1.,1.,1.))
@@ -36,4 +37,5 @@ zdx2 = dict(pvec=ss_vector(0.5, kappa=0.))
 
 mars = dict(klass=MarsStrategy)
 
-__all__ = ['tft', 'wsls', 'alld', 'allc', 'zdx', 'zdgtft2', 'zdr2', 'zdx2']
+__all__ = ['tft', 'wsls', 'alld', 'allc', 'zdx', 'zdgtft2', 'zdr2', 'zdx2',
+           'gtft', 'mars']
